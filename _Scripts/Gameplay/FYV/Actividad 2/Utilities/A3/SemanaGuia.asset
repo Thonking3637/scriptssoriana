@@ -1,0 +1,43 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e70fe6a5cc7fce84fa89349bfd805707, type: 3}
+  m_Name: SemanaGuia
+  m_EditorClassIdentifier: 
+  casos:
+  - dia: Lunes
+    producto: Huevos
+    kg: 5
+    registradoApp: 1
+  - dia: Martes
+    producto: Cebolla
+    kg: 7
+    registradoApp: 1
+  - dia: Miercoles
+    producto: Aguacate
+    kg: 3
+    registradoApp: 1
+  - dia: Jueves
+    producto: Manzana
+    kg: 10
+    registradoApp: 1
+  - dia: Viernes
+    producto: Zanahoria
+    kg: 2
+    registradoApp: 1
+  - dia: Sabado
+    producto: Jitomate
+    kg: 1
+    registradoApp: 1
+  - dia: Domingo
+    producto: Papa
+    kg: 4
+    registradoApp: 1

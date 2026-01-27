@@ -1,0 +1,20 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2e7db7ccc055d8947bb283e8a8ab2f1c, type: 3}
+  m_Name: Verdura_1
+  m_EditorClassIdentifier: 
+  nombre: Papa
+  tipoProducto: 2
+  prefabUnidad: {fileID: 5711871036639807278, guid: 4eac26b1b57036543a1dc8a278e905b1,
+    type: 3}
+  prefabLleno: {fileID: 0}
+  rangoPesoKg: {x: 0.8, y: 2.5}

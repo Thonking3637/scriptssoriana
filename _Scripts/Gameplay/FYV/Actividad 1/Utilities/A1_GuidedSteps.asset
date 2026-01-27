@@ -1,0 +1,30 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2b8804fc6b15cf442880694f907f754b, type: 3}
+  m_Name: A1_GuidedSteps
+  m_EditorClassIdentifier: 
+  steps:
+  - instructionKey: Toca una caja
+    action: 0
+    repeatCount: 1
+  - instructionKey: Gira la fruta
+    action: 1
+    repeatCount: 1
+  - instructionKey: Marca el defecto resaltado
+    action: 2
+    repeatCount: 3
+  - instructionKey: Presiona Evaluar Lote
+    action: 3
+    repeatCount: 1
+  - instructionKey: "Confirma la decisi\xF3n"
+    action: 4
+    repeatCount: 1

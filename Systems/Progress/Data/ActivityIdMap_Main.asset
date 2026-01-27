@@ -1,0 +1,59 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 02c0b23fa0b42064a9cc896fcca1a94b, type: 3}
+  m_Name: ActivityIdMap_Main
+  m_EditorClassIdentifier: 
+  scenes:
+  - sceneName: Level1
+    activityIdsByIndex:
+    - LINEA_CAJAS_ALTA_CAJA
+    - LINEA_CAJAS_ALTA_CAJA
+    - LINEA_CAJAS_SCAN
+    - LINEA_CAJAS_CONSULTA_PRECIO
+  - sceneName: Level2
+    activityIdsByIndex:
+    - LINEA_CAJAS_PAGO_EFECTIVO
+    - LINEA_CAJAS_PAGO_EFECTIVO
+    - LINEA_CAJAS_PAGO_TARJETA
+    - LINEA_CAJAS_PAGO_OMONEL
+    - LINEA_CAJAS_CONSULTA_PRECIO
+  - sceneName: Level3
+    activityIdsByIndex:
+    - LINEA_CAJAS_SERVICIO_FISICO
+    - LINEA_CAJAS_RECARGA_TA
+    - LINEA_CAJAS_REDONDEO
+    - LINEA_CAJAS_PRECIO_CAMBIADO
+    - LINEA_CAJAS_ALERTA_VALORES
+    - LINEA_CAJAS_ALERTA_VALORES
+  - sceneName: Level4
+    activityIdsByIndex:
+    - LINEA_CAJAS_CLIENTE_TIEMPO
+    - LINEA_CAJAS_CLIENTE_TEMPERAMENTO
+    - LINEA_CAJAS_CLIENTE_PRECIO
+  - sceneName: SETC
+    activityIdsByIndex:
+    - LINEA_CAJAS_CLIENTE_PRECIO
+    - SETC_REGISTRO_MERCANCIA
+    - SETC_ENTREGA_TIENDA
+    - SETC_DEVOLUCION_PRODUCTOS
+    - SETC_INSPECCION_PRODUCTOS
+    - SETC_PICKING
+    - SETC_PICKING_2
+    - SETC_ATENCION_CLIENTE
+  - sceneName: FRUTASVERDURAS
+    activityIdsByIndex:
+    - FYV_IDENTIFICACION_DEFECTOS
+    - FYV_PESAJE_MERMA
+    - FYV_ACOMODO_REPRO
+    - FYV_CLASEO
+    - FYV_REVITALIZACION
+    - FYV_FRUTA_PICADA
