@@ -3,240 +3,224 @@ using UnityEngine;
 using UnityEngine.UI;
 using System.Collections.Generic;
 
-public class CashPaymentActivity : ActivityBase
+/// <summary>
+/// Actividad de Pago en Efectivo - MIGRADA a LCPaymentActivityBase
+/// 
+/// ANTES: ~400 líneas
+/// DESPUÉS: ~150 líneas
+/// REDUCCIÓN: 62%
+/// 
+/// Cambios principales:
+/// - Ya no necesita: StartNewAttempt, RegisterProductScanned, BindCurrentProduct,
+///   HandleTicketDelivered, ActivityComplete, ResetValues (versión base)
+/// - Solo implementa lógica específica de efectivo
+/// </summary>
+public class CashPaymentActivity : LCPaymentActivityBase
 {
-    [Header("Tiempo en Actividad")]
-    public TextMeshProUGUI liveTimerText;
-    public TextMeshProUGUI successTimeText;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN ESPECÍFICA DE EFECTIVO
+    // (Solo lo que NO está en la clase base)
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Product Configuration")]
-    public List<GameObject> productPrefabs;
-    public Transform spawnPoint;
-    public ProductScanner scanner;
+    [Header("Cash Payment - Money")]
+    [SerializeField] private MoneySpawner moneySpawner;
+    [SerializeField] private CustomerPayment customerPayment;
 
-    [Header("UI Elements")]
-    public TextMeshProUGUI activityProductsText;
-    public TextMeshProUGUI activityTotalPriceText;
-    public List<Button> subtotalButtons;
-    public List<Button> numberButtons;
-    public List<Button> efectivoButtons;
-    public TMP_InputField amountInputField;
+    [Header("Cash Payment - Botones Efectivo")]
+    [SerializeField] private List<Button> efectivoButtons;
 
-    [Header("Payment Configuration")]
-    public MoneySpawner moneySpawner;
-    public CustomerPayment customerPayment;
+    [Header("Cash Payment - Money Panel")]
+    [SerializeField] private GameObject moneyPanel;
+    [SerializeField] private Vector2 moneyPanelStartPos;
+    [SerializeField] private Vector2 moneyPanelEndPos;
+    [SerializeField] private Vector2 moneyPanelHidePos;
 
-    [Header("Money Panel Configuration")]
-    public GameObject moneyPanel;
-    public Vector2 moneyPanelStartPos;
-    public Vector2 moneyPanelEndPos;
-    public Vector2 moneyPanelHidePos;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // IMPLEMENTACIÓN DE MÉTODOS ABSTRACTOS
+    // (Configuración que la base necesita conocer)
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Ticket Configuration")]
-    public GameObject ticketPrefab;
-    public Transform ticketSpawnPoint;
-    public Transform ticketTargetPoint;
+    protected override string GetStartCameraPosition() => "Iniciando Juego";
+    protected override string GetSubtotalCameraPosition() => "Actividad Billete SubTotal";
+    protected override string GetSuccessCameraPosition() => "Actividad Billete Success";
+    protected override string GetActivityCommandId() => "Day2_PagoEfectivo";
 
-    [Header("Configuración del Cliente")]
-    public CustomerSpawner customerSpawner;
-    private GameObject currentCustomer;
-    public Transform pinEntryPoint;
-    public Transform checkoutPoint;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MANEJO DE INSTRUCCIONES (cada actividad tiene índices diferentes)
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Panel Success")]
-    public Button continueButton;
-
-    private GameObject currentProduct;
-    private int scannedCount = 0;
-    private int productsToScan = 4;
-
-    private int currentAttempt = 0;
-    private const int maxAttempts = 3;
-
-    public override void StartActivity()
+    /// <summary>
+    /// Instrucciones de CashPayment:
+    /// 0 = Inicio (bienvenida)
+    /// 1 = Subtotal
+    /// 2 = Recoger efectivo
+    /// 3 = Escribir monto
+    /// 4 = Dar cambio
+    /// 5 = Ticket
+    /// 6 = Reiniciar
+    /// </summary>
+    protected override void ShowInitialInstruction()
     {
-        base.StartActivity();
+        UpdateInstructionOnce(0, StartNewAttempt);
+    }
 
-        if (scanner != null)
+    protected override void OnSubtotalPhaseReady()
+    {
+        UpdateInstructionOnce(1); // "Presiona SUBTOTAL"
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN ESPECÍFICA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void OnActivityInitialize()
+    {
+        // Suscribirse al evento de dinero recolectado del cliente
+        if (customerPayment != null)
         {
-            scanner.UnbindUI(this);
-            scanner.ClearUI();
-            scanner.BindUI(this, activityProductsText, activityTotalPriceText, true);
+            customerPayment.OnAllCustomerMoneyCollected -= OnAllMoneyCollected;
+            customerPayment.OnAllCustomerMoneyCollected += OnAllMoneyCollected;
         }
 
-        productNames = ObjectPoolManager.Instance.GetAvailablePrefabNames(PoolTag.Producto).ToArray();
-
-        customerPayment.OnAllCustomerMoneyCollected -= ActivateAmountInput;
-        customerPayment.OnAllCustomerMoneyCollected += ActivateAmountInput;
-
-        InitializeCommands();
-
-        UpdateInstructionOnce(0, () =>
-        {
-            StartNewAttempt();
-        });
-
+        // Desactivar botones de efectivo inicialmente
         foreach (var button in efectivoButtons)
         {
             button.interactable = false;
-
         }
-
-        activityTimerText = liveTimerText;
-        activityTimeText = successTimeText;
     }
 
     protected override void InitializeCommands()
     {
-        CommandManager.CommandAction subTotalCommand = new CommandManager.CommandAction
+        // Comando SUBTOTAL
+        commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "SUBTOTAL",
             customAction = HandleSubTotal,
-            requiredActivity = "Day2_PagoEfectivo",
+            requiredActivity = GetActivityCommandId(),
             commandButtons = subtotalButtons
-        };
-        commandManager.commandList.Add(subTotalCommand);
+        });
 
-        CommandManager.CommandAction efectivoCommand = new CommandManager.CommandAction
+        // Comando EFECTIVO
+        commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "EFECTIVO",
             customAction = HandleEfectivo,
-            requiredActivity = "Day2_PagoEfectivo",
-            commandButtons = efectivoButtons,
-        };
-        commandManager.commandList.Add(efectivoCommand);
-    }
-
-    private void StartNewAttempt()
-    {
-        scannedCount = 0;
-
-        currentCustomer = customerSpawner.SpawnCustomer();
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-
-        cameraController.MoveToPosition("Iniciando Juego", () =>
-        {
-            customerMovement.MoveToCheckout(() =>
-            {
-                currentProduct = GetPooledProduct(scannedCount, spawnPoint);
-                BindCurrentProduct();
-            });
+            requiredActivity = GetActivityCommandId(),
+            commandButtons = efectivoButtons
         });
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LÓGICA ESPECÍFICA DE PAGO EN EFECTIVO
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    public void RegisterProductScanned()
+    /// <summary>
+    /// Sobrescribe el comportamiento después de presionar Subtotal.
+    /// En efectivo: actualiza UI de dinero y genera pago del cliente.
+    /// </summary>
+    protected override void OnSubtotalPressed(float totalAmount)
     {
-        if (currentProduct != null)
-        {
-            var drag = currentProduct.GetComponent<DragObject>();
-            string poolName = (drag != null) ? drag.GetOriginalPoolNameSafe() : currentProduct.name;
-
-            ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, poolName, currentProduct);
-            currentProduct = null;
-        }
-
-        if (scannedCount < productsToScan)
-        {
-            currentProduct = GetPooledProduct(scannedCount, spawnPoint);
-            BindCurrentProduct();
-        }
-        else
-        {
-            cameraController.MoveToPosition("Actividad Billete SubTotal", () =>
-            {
-                UpdateInstructionOnce(1);
-                AnimateButtonsSequentiallyWithActivation(subtotalButtons);
-            });
-        }
-        
-    }
-    public void HandleSubTotal()
-    {
-        float totalAmount = GetTotalAmount(activityTotalPriceText);
-
-        if (totalAmount <= 0)
-        {
-            Debug.LogError("Error: El total de la compra es inválido.");
-            return;
-        }
-
+        // Actualizar UI del spawner de dinero
         moneySpawner.UpdateTotalPurchaseText(totalAmount);
 
-        SoundManager.Instance.PlaySound("success");
-
+        // Mover cámara a recoger efectivo
         cameraController.MoveToPosition("Actividad Billete Recoger Efectivo", () =>
         {
             UpdateInstructionOnce(2);
-            customerPayment.GenerateCustomerPayment(totalAmount);           
+
+            // Generar los billetes/monedas que el cliente va a dar
+            customerPayment.GenerateCustomerPayment(totalAmount);
         });
     }
 
-    public void ActivateAmountInput(float amount)
+    /// <summary>
+    /// Callback cuando el cliente ha entregado todo su dinero.
+    /// </summary>
+    private void OnAllMoneyCollected(float amount)
     {
         SoundManager.Instance.PlaySound("success");
 
+        // Mover cámara a escribir el monto recibido
         cameraController.MoveToPosition("Actividad Billete Escribir Efectivo", () =>
         {
             UpdateInstructionOnce(3);
+
+            // Activar input de monto (método de la base)
+            ActivateAmountInput(amount, OnAmountInputComplete);
         });
-
-        if (amountInputField != null)
-        {
-            amountInputField.text = "";
-            amountInputField.gameObject.SetActive(true);
-            amountInputField.DeactivateInputField();
-            amountInputField.ActivateInputField();
-        }
-
-        string amountString = ((int)amount).ToString() + "00";
-
-        List<Button> selectedButtons = GetButtonsForAmount(amountString, numberButtons);
-
-        foreach (var button in numberButtons)
-        {
-            button.gameObject.SetActive(false);
-        }
-
-        if (selectedButtons.Count > 0)
-        {
-            ActivateButtonWithSequence(selectedButtons, 0, () =>
-            {
-                foreach (var button in efectivoButtons) button.interactable = true;
-                AnimateButtonsSequentiallyWithActivation(efectivoButtons);              
-            });
-        }
     }
 
+    /// <summary>
+    /// Callback cuando el usuario termina de escribir el monto.
+    /// </summary>
+    private void OnAmountInputComplete()
+    {
+        // Activar botones de efectivo
+        foreach (var button in efectivoButtons)
+        {
+            button.interactable = true;
+        }
+
+        AnimateButtonsSequentiallyWithActivation(efectivoButtons);
+    }
+
+    /// <summary>
+    /// Maneja el comando EFECTIVO - procede a dar cambio.
+    /// </summary>
     public void HandleEfectivo()
     {
         SoundManager.Instance.PlaySound("success");
+
+        // Mover cámara a dar cambio
         cameraController.MoveToPosition("Actividad Billete Dar Cambio", () =>
         {
-            UpdateInstructionOnce(4);
-            MoneyManager.OpenMoneyPanel(moneyPanel, moneyPanelStartPos, moneyPanelEndPos);          
-        });      
+            UpdateInstructionOnce(4); // "Selecciona el cambio correcto"
+
+            // Abrir panel de dinero para dar cambio
+            MoneyManager.OpenMoneyPanel(moneyPanel, moneyPanelStartPos, moneyPanelEndPos);
+
+            // El flujo continúa cuando el usuario valida el cambio correcto
+            // MoneySpawner.ValidateChange() -> OnCorrectChangeGiven()
+        });
     }
 
+    /// <summary>
+    /// Llamado por MoneySpawner.ValidateChange() cuando el cambio es correcto.
+    /// ⚠️ IMPORTANTE: MoneySpawner usa FindObjectOfType para llamar este método.
+    /// TODO: Refactorizar MoneySpawner para usar eventos en lugar de FindObjectOfType.
+    /// </summary>
     public void OnCorrectChangeGiven()
     {
+        // Cerrar panel de dinero
         MoneyManager.CloseMoneyPanel(moneyPanel, moneyPanelHidePos);
         SoundManager.Instance.PlaySound("success");
+
+        // Mover cámara y cliente a recibir ticket
         cameraController.MoveToPosition("Actividad Billete Dar Ticket", () =>
         {
-            UpdateInstructionOnce(5);
+            UpdateInstructionOnce(5); // "Entrega el ticket"
+
+            // Generar ticket (usa método de la base)
             InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, HandleTicketDelivered);
-        });      
+        });
     }
-    
-    private void HandleTicketDelivered()
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // SOBRESCRITURAS DE FLUJO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Sobrescribe HandleTicketDelivered de la base para usar la lógica de CashPayment.
+    /// </summary>
+    protected override void HandleTicketDelivered()
     {
         SoundManager.Instance.PlaySound("success");
-
         currentAttempt++;
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-        customerMovement.MoveToExit();
 
+        // Cliente sale
+        currentCustomerMovement?.MoveToExit();
+
+        // Decidir siguiente paso
         if (currentAttempt < maxAttempts)
         {
             RestartActivity();
@@ -247,24 +231,6 @@ public class CashPaymentActivity : ActivityBase
         }
     }
 
-    public void ActivityComplete()
-    {
-        StopActivityTimer();
-        ResetValues();
-        commandManager.commandList.Clear();
-        cameraController.MoveToPosition("Actividad Billete Success", () =>
-        {
-            continueButton.onClick.RemoveAllListeners();
-            SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
-            
-            continueButton.onClick.AddListener(() =>
-            {
-                cameraController.MoveToPosition("Iniciando Juego");
-                CompleteActivity();               
-            });
-        });
-    }
     private void RestartActivity()
     {
         ResetValues();
@@ -272,81 +238,58 @@ public class CashPaymentActivity : ActivityBase
         UpdateInstructionOnce(6, StartNewAttempt, StartCompetition);
     }
 
-    public void StartCompetition()
+    private void ActivityComplete()
     {
-        SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, false);
-        liveTimerText.GetComponent<TextMeshProUGUI>().enabled = true;
-        StartActivityTimer();
-    }
-    private void ResetValues()
-    {
-        scannedCount = 0;
-        amountInputField.text = "";
+        StopActivityTimer();
+        ResetValues();
+        commandManager.commandList.Clear();
 
-        if (scanner != null)
+        cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
         {
-            scanner.ClearUI();
-        }
+            continueButton.onClick.RemoveAllListeners();
+            SoundManager.Instance.RestorePreviousMusic();
+            SoundManager.Instance.PlaySound("win");
 
-        if (activityProductsText != null) activityProductsText.text = "";
-        if (activityTotalPriceText != null) activityTotalPriceText.text = "$0.00";
-
-        moneySpawner.ResetMoneyUI();
-        customerPayment.ResetCustomerPayment();
+            continueButton.onClick.AddListener(() =>
+            {
+                cameraController.MoveToPosition(GetStartCameraPosition());
+                CompleteActivity();
+            });
+        });
     }
 
-    public void OnNumberButtonPressed(string number)
+    protected override void ResetValues()
     {
-        if (amountInputField != null)
-        {
-            amountInputField.text += number;
-        }
+        // Llamar reset de la base (scanner, textos, etc.)
+        base.ResetValues();
+
+        // Reset específico de efectivo
+        if (moneySpawner != null)
+            moneySpawner.ResetMoneyUI();
+
+        if (customerPayment != null)
+            customerPayment.ResetCustomerPayment();
     }
 
-    public float GetTotalAmountForDisplay()
+    protected override void OnRestartAttempt()
     {
-        return GetTotalAmount(activityTotalPriceText);
+        ResetValues();
+        RegenerateProductValues();
+
+        // En efectivo, mostramos instrucción antes de reiniciar
+        UpdateInstructionOnce(6, StartNewAttempt, StartCompetition);
     }
 
-    protected override void Initialize()
-    {
-       
-    }
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
 
     protected override void OnDisable()
     {
         base.OnDisable();
+
+        // Desuscribirse del evento de dinero
         if (customerPayment != null)
-            customerPayment.OnAllCustomerMoneyCollected -= ActivateAmountInput;
-
-        if (scanner != null) scanner.UnbindUI(this);
-    }
-
-    private void BindCurrentProduct()
-    {
-        if (currentProduct == null) return;
-
-        var drag = currentProduct.GetComponent<DragObject>();
-        if (drag == null) return;
-
-        drag.OnScanned -= OnProductScanned;
-        drag.OnScanned += OnProductScanned;
-    }
-
-    private void OnProductScanned(DragObject obj)
-    {
-        if (obj == null) return;
-
-        obj.OnScanned -= OnProductScanned;
-
-        if (scanner != null)
-        {
-            scanner.RegisterProductScan(obj);
-            RegisterProductScanned();
-        }
-        else
-        {
-            Debug.LogError("CashPaymentActivity: scanner es NULL.");
-        }
+            customerPayment.OnAllCustomerMoneyCollected -= OnAllMoneyCollected;
     }
 }

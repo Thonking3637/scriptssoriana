@@ -2,205 +2,194 @@
 using System.Collections;
 using System.Collections.Generic;
 using TMPro;
-using System;
 using UnityEngine.UI;
 
-public class RedeemPointsActivity : ActivityBase
+/// <summary>
+/// Actividad de Canje de Puntos - MIGRADA a LCPaymentActivityBase
+/// 
+/// ANTES: ~350 líneas
+/// DESPUÉS: ~250 líneas
+/// REDUCCIÓN: ~29%
+/// 
+/// Flujo de instrucciones:
+/// 0 = Inicio (bienvenida)
+/// 1 = Subtotal
+/// 2 = Mostrar tarjeta
+/// 3 = Tarjeta segunda posición
+/// 4 = Tarjeta posición final / WaitBeforePay
+/// 5 = Panel de pago (P+A, Enter)
+/// 6 = Aplicar descuento
+/// 7 = Ticket
+/// 8 = Reiniciar
+/// </summary>
+public class RedeemPointsActivity : LCPaymentActivityBase
 {
-    [Header("Activity Timer")]
-    public TextMeshProUGUI liveTimerText;
-    public TextMeshProUGUI successTimeText;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN ESPECÍFICA DE CANJE
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Product Configuration")]
-    public List<GameObject> productPrefabs;
-    public Transform spawnPoint;
-    public ProductScanner scanner;
+    [Header("Redeem - Card Interaction")]
+    [SerializeField] private CardInteraction cardInteraction;
 
-    [Header("Card Configuration")]
-    public CardInteraction cardInteraction;
+    [Header("Redeem - UI Específica")]
+    [SerializeField] private GameObject paymentPanel;
 
-    [Header("UI Elements")]
-    public GameObject paymentPanel;
-    public GameObject ticketPrefab;
-    public Transform ticketSpawnPoint;
-    public Transform ticketTargetPoint;
-    public TextMeshProUGUI activityProductsText;
-    public TextMeshProUGUI activityTotalPriceText;
-    public List<Button> subtotalButtons;
-    public List<Button> paButtons;
-    public List<Button> enterButtons;
-    public List<Button> efectivoButtons;
+    [Header("Redeem - Botones Específicos")]
+    [SerializeField] private List<Button> paButtons;
+    [SerializeField] private List<Button> enterButtons;
+    [SerializeField] private List<Button> efectivoButtons;
 
-    [Header("Customer Configuration")]
-    public CustomerSpawner customerSpawner;
-    private GameObject currentCustomer;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // IMPLEMENTACIÓN DE MÉTODOS ABSTRACTOS
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    public Button continueButton;
+    protected override string GetStartCameraPosition() => "Iniciando Juego";
+    protected override string GetSubtotalCameraPosition() => "Actividad Canjeo SubTotal";
+    protected override string GetSuccessCameraPosition() => "Actividad Canjeo Success";
+    protected override string GetActivityCommandId() => "Day2_CanjeoPuntos";
 
-    private GameObject currentProduct;
-    private int scannedCount = 0;
-    private int productsToScan = 4;
-    private int currentAttempt = 0;
-    private const int maxAttempts = 3;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MANEJO DE INSTRUCCIONES
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void ShowInitialInstruction()
+    {
+        // RedeemPoints incrementa currentAttempt al inicio del intento
+        UpdateInstructionOnce(0, CheckAndStartNewAttempt);
+    }
+
+    protected override void OnSubtotalPhaseReady()
+    {
+        UpdateInstructionOnce(1); // "Presiona SUBTOTAL"
+        ActivateCommandButtons(subtotalButtons);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
 
     protected override void Start()
     {
-        paymentPanel.SetActive(false);
+        base.Start();
+        if (paymentPanel != null)
+            paymentPanel.SetActive(false);
     }
 
-    public override void StartActivity()
+    protected override void OnActivityInitialize()
     {
-        base.StartActivity();
-
-        scanner.BindUI(this, activityProductsText, activityTotalPriceText, true);
-
-        productNames = ObjectPoolManager.Instance.GetAvailablePrefabNames(PoolTag.Producto).ToArray();
-        cardInteraction.OnCardMovedToFirstPosition += HandleCardArrived;
-        cardInteraction.OnCardMovedToSecondPosition += HandleCardMovedToSecondPosition;
-        cardInteraction.OnCardReturned += HandleCardReturned;
-
-        InitializeCommands();
-
-        UpdateInstructionOnce(0, () =>
+        // Suscribirse a eventos de CardInteraction
+        if (cardInteraction != null)
         {
-            StartNewAttempt();
-        });
+            cardInteraction.OnCardMovedToFirstPosition -= HandleCardArrived;
+            cardInteraction.OnCardMovedToSecondPosition -= HandleCardMovedToSecondPosition;
+            cardInteraction.OnCardReturned -= HandleCardReturned;
 
-        activityTimerText = liveTimerText;
-        activityTimeText = successTimeText;
+            cardInteraction.OnCardMovedToFirstPosition += HandleCardArrived;
+            cardInteraction.OnCardMovedToSecondPosition += HandleCardMovedToSecondPosition;
+            cardInteraction.OnCardReturned += HandleCardReturned;
+        }
+
+        // Desactivar botones específicos
+        foreach (var button in paButtons)
+            button.gameObject.SetActive(false);
+        foreach (var button in enterButtons)
+            button.gameObject.SetActive(false);
+        foreach (var button in efectivoButtons)
+            button.gameObject.SetActive(false);
     }
 
     protected override void InitializeCommands()
     {
-        foreach (var button in subtotalButtons) button.gameObject.SetActive(false);
-        foreach (var button in paButtons) button.gameObject.SetActive(false);
-        foreach (var button in enterButtons) button.gameObject.SetActive(false);
-        foreach (var button in efectivoButtons) button.gameObject.SetActive(false);
+        // Desactivar botones de subtotal
+        foreach (var button in subtotalButtons)
+            button.gameObject.SetActive(false);
 
-        CommandManager.CommandAction subtotalCommand = new CommandManager.CommandAction
+        // Comando SUBTOTAL
+        commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "SUBTOTAL",
-            customAction = () => {
+            customAction = () =>
+            {
                 ActivateCommandButtons(subtotalButtons);
-                HandleSubtotalCommand();
+                HandleSubTotal();
             },
-            requiredActivity = "Day2_CanjeoPuntos",
+            requiredActivity = GetActivityCommandId(),
             commandButtons = subtotalButtons
-        };
-        commandManager.commandList.Add(subtotalCommand);
+        });
 
-        CommandManager.CommandAction payCommand = new CommandManager.CommandAction
+        // Comando P+A
+        commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "P+A",
             customAction = HandlePACommand,
-            requiredActivity = "Day2_CanjeoPuntos",
+            requiredActivity = GetActivityCommandId(),
             commandButtons = paButtons
-        };
-        commandManager.commandList.Add(payCommand);
+        });
 
-        CommandManager.CommandAction enterCommand = new CommandManager.CommandAction
+        // Comando ENTER
+        commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "ENTER",
-            customAction = () => {
-                ActivateCommandButtons(enterButtons);
-                HandleEnterCommand();
-            },
-            requiredActivity = "Day2_CanjeoPuntos",
+            customAction = HandleEnterCommand,
+            requiredActivity = GetActivityCommandId(),
             commandButtons = enterButtons
-        };
-        commandManager.commandList.Add(enterCommand);
+        });
 
-        CommandManager.CommandAction cashCommand = new CommandManager.CommandAction
+        // Comando EFECTIVO
+        commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "EFECTIVO",
             customAction = HandleEfectivoCommand,
-            requiredActivity = "Day2_CanjeoPuntos",
+            requiredActivity = GetActivityCommandId(),
             commandButtons = efectivoButtons
-        };
-        commandManager.commandList.Add(cashCommand);
-    }
-
-
-    private void StartNewAttempt()
-    {
-        if (currentAttempt >= maxAttempts)
-        {
-            ActivityComplete();
-            return;
-        }
-
-        currentAttempt++;
-        scannedCount = 0;
-
-        currentCustomer = customerSpawner.SpawnCustomer();
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-
-        cameraController.MoveToPosition("Iniciando Juego", () =>
-        {
-            customerMovement.MoveToCheckout(() =>         
-            {
-                currentProduct = GetPooledProduct(scannedCount, spawnPoint);
-                EnsureProductData(currentProduct);
-                BindCurrentProduct();
-            });
         });
     }
 
-    public void RegisterProductScanned()
+    /// <summary>
+    /// Override para usar EnsureProductData después de spawnear.
+    /// </summary>
+    protected override void OnAfterProductSpawn(GameObject product)
     {
-        if (currentProduct != null)
-        {
-            var drag = currentProduct.GetComponent<DragObject>();
-
-            string poolName = (drag != null && !string.IsNullOrEmpty(drag.OriginalPoolName))
-                ? drag.OriginalPoolName
-                : currentProduct.name;
-
-            ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, poolName, currentProduct);
-            currentProduct = null;
-        }
-
-        scannedCount++;
-
-        if (scannedCount < productsToScan)
-        {
-            currentProduct = GetPooledProduct(scannedCount, spawnPoint);
-            EnsureProductData(currentProduct);
-            BindCurrentProduct();
-        }
-        else
-        {
-            cameraController.MoveToPosition("Actividad Canjeo SubTotal", () =>
-            {
-                UpdateInstructionOnce(1);
-                ActivateCommandButtons(subtotalButtons);
-                AnimateButtonsSequentiallyWithActivation(subtotalButtons);
-            });
-        }
+        EnsureProductData(product);
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LÓGICA ESPECÍFICA DE CANJE - FLUJO DE TARJETA
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    public void HandleSubtotalCommand()
+    /// <summary>
+    /// Después de presionar Subtotal, mostrar la tarjeta.
+    /// </summary>
+    protected override void OnSubtotalPressed(float totalAmount)
     {
         ShowCard();
     }
 
+    /// <summary>
+    /// Muestra la tarjeta y activa la interacción.
+    /// </summary>
     private void ShowCard()
     {
         SoundManager.Instance.PlaySound("success");
         cameraController.MoveToPosition("Actividad Omonel Primera Posicion", () =>
         {
-            UpdateInstructionOnce(2);
+            UpdateInstructionOnce(2); // "Desliza la tarjeta"
             cardInteraction.gameObject.SetActive(true);
         });
     }
 
+    /// <summary>
+    /// Callback cuando la tarjeta llega a la primera posición.
+    /// </summary>
     private void HandleCardArrived()
     {
         cameraController.MoveToPosition("Actividad Omonel Segunda Posicion");
         UpdateInstructionOnce(3);
     }
 
+    /// <summary>
+    /// Callback cuando la tarjeta llega a la segunda posición.
+    /// </summary>
     private void HandleCardMovedToSecondPosition()
     {
         SoundManager.Instance.PlaySound("success");
@@ -208,15 +197,43 @@ public class RedeemPointsActivity : ActivityBase
         WaitBeforePay();
     }
 
+    /// <summary>
+    /// Espera antes de mostrar opciones de pago.
+    /// </summary>
     private void WaitBeforePay()
     {
         cameraController.MoveToPosition("Actividad Canjeo PA", () =>
         {
             ActivateCommandButtons(paButtons);
-            AnimateButtonsSequentiallyWithActivation(paButtons, () => HandlePACommand());
-        });       
+            AnimateButtonsSequentiallyWithActivation(paButtons, HandlePACommand);
+        });
     }
 
+    /// <summary>
+    /// Callback cuando la tarjeta es devuelta.
+    /// </summary>
+    private void HandleCardReturned()
+    {
+        if (currentCustomer == null)
+        {
+            Debug.LogError("RedeemPointsActivity: No hay cliente asignado en HandleCardReturned().");
+            return;
+        }
+
+        if (currentCustomerMovement == null)
+        {
+            Debug.LogError("RedeemPointsActivity: El cliente no tiene CustomerMovement.");
+            return;
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LÓGICA DE PAGO CON PUNTOS
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Maneja el comando P+A.
+    /// </summary>
     public void HandlePACommand()
     {
         SoundManager.Instance.PlaySound("success");
@@ -229,6 +246,9 @@ public class RedeemPointsActivity : ActivityBase
         });
     }
 
+    /// <summary>
+    /// Maneja el comando Enter - aplica el descuento.
+    /// </summary>
     public void HandleEnterCommand()
     {
         SoundManager.Instance.PlaySound("success");
@@ -236,95 +256,123 @@ public class RedeemPointsActivity : ActivityBase
         ApplyPurchaseDeduction();
     }
 
+    /// <summary>
+    /// Aplica el descuento del 100% por canje de puntos.
+    /// </summary>
     private void ApplyPurchaseDeduction()
     {
         activityProductsText.text += "\n100% de descuento aplicado";
-        activityTotalPriceText.text = $"${0.00}";
+        activityTotalPriceText.text = "$0.00";
         paymentPanel.SetActive(false);
         StartCoroutine(WaitForCashCommand());
     }
 
+    /// <summary>
+    /// Espera y muestra el comando de efectivo.
+    /// </summary>
     private IEnumerator WaitForCashCommand()
     {
         yield return new WaitForSeconds(1f);
         cameraController.MoveToPosition("Actividad Canjeo PA", () =>
-        {           
+        {
             ActivateCommandButtons(efectivoButtons);
             AnimateButtonsSequentiallyWithActivation(efectivoButtons);
         });
-        
     }
 
+    /// <summary>
+    /// Maneja el comando Efectivo - genera el ticket.
+    /// </summary>
     public void HandleEfectivoCommand()
     {
         cameraController.MoveToPosition("Actividad Canjeo Ticket Instantiante", () =>
         {
-            SpawnTicket();
+            SpawnRedeemTicket();
         });
     }
 
-    private void SpawnTicket()
+    /// <summary>
+    /// Genera el ticket de canje.
+    /// </summary>
+    private void SpawnRedeemTicket()
     {
         UpdateInstructionOnce(7);
         SoundManager.Instance.PlaySound("success");
-        InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, HandleTicketDelivered);
+        InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, OnTicketDelivered);
     }
-    private void HandleTicketDelivered()
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // TICKET Y FINALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Callback cuando el ticket es entregado.
+    /// </summary>
+    private void OnTicketDelivered()
     {
         SoundManager.Instance.PlaySound("success");
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-        customerMovement.MoveToExit();
+        currentCustomerMovement?.MoveToExit();
         RestartActivity();
     }
 
+    /// <summary>
+    /// Reinicia la actividad.
+    /// </summary>
     private void RestartActivity()
     {
         ResetValues();
         cardInteraction.ResetCard();
         RegenerateProductValues();
-        UpdateInstructionOnce(8, StartNewAttempt, StartCompetition);
+        UpdateInstructionOnce(8, CheckAndStartNewAttempt, StartCompetition);
     }
 
-    private void ResetValues()
+    /// <summary>
+    /// Verifica si hay más intentos disponibles antes de iniciar.
+    /// En RedeemPoints, el conteo de intentos se hace AL INICIO del intento.
+    /// </summary>
+    private void CheckAndStartNewAttempt()
     {
-        scannedCount = 0;
-
-        if (scanner != null)
+        if (currentAttempt >= maxAttempts)
         {
-            scanner.ClearUI();
-        }
-
-        if (activityProductsText != null) activityProductsText.text = "";
-        if (activityTotalPriceText != null) activityTotalPriceText.text = "$0.00";
-
-    }
-    public void StartCompetition()
-    {
-        SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, false);
-        HideInstructionsPanel();
-        liveTimerText.GetComponent<TextMeshProUGUI>().enabled = true;
-        StartActivityTimer();
-    }
-
-    private void HandleCardReturned()
-    {
-        if (currentCustomer == null)
-        {
-            Debug.LogError("Error: No customer assigned in HandleCardReturned().");
+            ShowActivityCompletePanel();
             return;
         }
 
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-        if (customerMovement == null)
-        {
-            Debug.LogError("Error: The current customer does not have a 'CustomerMovement' component.");
-        }
+        currentAttempt++;
+        StartNewAttempt();
     }
-    public void ActivityComplete()
+
+    /// <summary>
+    /// Override de StartNewAttempt para no incrementar currentAttempt aquí
+    /// (ya se incrementa en CheckAndStartNewAttempt).
+    /// </summary>
+    protected override void StartNewAttempt()
+    {
+        scannedCount = 0;
+
+        currentCustomer = customerSpawner.SpawnCustomer();
+        currentCustomerMovement = currentCustomer.GetComponent<CustomerMovement>();
+
+        cameraController.MoveToPosition(GetStartCameraPosition(), () =>
+        {
+            currentCustomerMovement.MoveToCheckout(() =>
+            {
+                SpawnAndBindProduct();
+                OnCustomerReady();
+            });
+        });
+    }
+
+    /// <summary>
+    /// Muestra el panel de éxito.
+    /// </summary>
+    private void ShowActivityCompletePanel()
     {
         StopActivityTimer();
+        ResetValues();
         commandManager.commandList.Clear();
-        cameraController.MoveToPosition("Actividad Canjeo Success", () =>
+
+        cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
         {
             continueButton.onClick.RemoveAllListeners();
             SoundManager.Instance.RestorePreviousMusic();
@@ -332,72 +380,36 @@ public class RedeemPointsActivity : ActivityBase
 
             continueButton.onClick.AddListener(() =>
             {
-                cameraController.MoveToPosition("Iniciando Juego");
+                cameraController.MoveToPosition(GetStartCameraPosition());
+                cardInteraction.ResetCard();
                 CompleteActivity();
             });
         });
     }
 
-    protected override void Initialize()
+    // ══════════════════════════════════════════════════════════════════════════════
+    // RESET Y LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void ResetValues()
     {
-        
-    }
+        base.ResetValues();
 
-    private void BindCurrentProduct()
-    {
-        if (currentProduct == null) return;
-
-        var drag = currentProduct.GetComponent<DragObject>();
-        if (drag == null) return;
-
-        drag.OnScanned -= OnProductScanned; // anti duplicados por reuse de pool
-        drag.OnScanned += OnProductScanned;
-    }
-
-    private void OnProductScanned(DragObject obj)
-    {
-        if (obj == null) return;
-
-        obj.OnScanned -= OnProductScanned;
-
-        if (scanner != null)
-        {
-            scanner.RegisterProductScan(obj);
-            RegisterProductScanned();
-        }
-        else
-        {
-            Debug.LogError("RedeemPointsActivity: scanner es NULL.");
-        }
-    }
-
-
-    private void EnsureProductData(GameObject go)
-    {
-        if (go == null) return;
-
-        var drag = go.GetComponent<DragObject>();
-        if (drag == null) return;
-
-        if (drag.productData == null)
-        {
-            var p = ScriptableObject.CreateInstance<Product>();
-
-            p.Initialize(
-                UnityEngine.Random.Range(1000, 9999).ToString(),
-                go.name,
-                UnityEngine.Random.Range(10f, 60f),
-                1
-            );
-
-            drag.productData = p;
-        }
+        // Reset específico de canje
+        if (paymentPanel != null)
+            paymentPanel.SetActive(false);
     }
 
     protected override void OnDisable()
     {
         base.OnDisable();
-        if (scanner != null) scanner.UnbindUI(this);
-    }
 
+        // Desuscribirse de eventos de CardInteraction
+        if (cardInteraction != null)
+        {
+            cardInteraction.OnCardMovedToFirstPosition -= HandleCardArrived;
+            cardInteraction.OnCardMovedToSecondPosition -= HandleCardMovedToSecondPosition;
+            cardInteraction.OnCardReturned -= HandleCardReturned;
+        }
+    }
 }

@@ -5,7 +5,7 @@ using UnityEngine.SceneManagement;
 using DG.Tweening;
 using UnityEngine.UI;
 
-public class GameManager: MonoBehaviour
+public class GameManager : MonoBehaviour
 {
     [Header("UI Elements")]
     public GameObject pausePanel;
@@ -124,16 +124,32 @@ public class GameManager: MonoBehaviour
 
     private void DisablePauseButton()
     {
-        pauseButtonImage.sprite = disabledPauseSprite;
-        pauseButtonImage.color = new Color(1, 1, 1, 0.5f);
-        pauseButton.GetComponent<Button>().interactable = false;
+        if (pauseButtonImage != null)
+        {
+            pauseButtonImage.sprite = disabledPauseSprite;
+            pauseButtonImage.color = new Color(1, 1, 1, 0.5f);
+        }
+
+        if (pauseButton != null)
+        {
+            var btn = pauseButton.GetComponent<Button>();
+            if (btn != null) btn.interactable = false;
+        }
     }
 
     private void EnablePauseButton()
     {
-        pauseButtonImage.sprite = normalPauseSprite;
-        pauseButtonImage.color = new Color(1, 1, 1, 1f);
-        pauseButton.GetComponent<Button>().interactable = true;
+        if (pauseButtonImage != null)
+        {
+            pauseButtonImage.sprite = normalPauseSprite;
+            pauseButtonImage.color = new Color(1, 1, 1, 1f);
+        }
+
+        if (pauseButton != null)
+        {
+            var btn = pauseButton.GetComponent<Button>();
+            if (btn != null) btn.interactable = true;
+        }
     }
 
     private void InitializeActivities()
@@ -170,10 +186,21 @@ public class GameManager: MonoBehaviour
         ApplyActivityConfig(currentActivityIndex);
 
         currentActivity = activities[currentActivityIndex];
+
+        // ✅ FIX: Verificar que currentActivity no sea null
+        if (currentActivity == null)
+        {
+            Debug.LogError($"[GameManager] La actividad en el índice {currentActivityIndex} es NULL.");
+            return;
+        }
+
         currentActivity.gameObject.SetActive(true);
         currentActivity.OnActivityComplete += HandleActivityComplete;
 
-        cameraController.InitializeCameraPosition(currentActivity.startCameraPosition);
+        if (cameraController != null && !string.IsNullOrEmpty(currentActivity.startCameraPosition))
+        {
+            cameraController.InitializeCameraPosition(currentActivity.startCameraPosition);
+        }
 
         OnActivityChange?.Invoke(currentActivityIndex);
         currentActivity.StartActivity();
@@ -181,9 +208,10 @@ public class GameManager: MonoBehaviour
 
     private void ApplyActivityConfig(int index)
     {
-        if (index < 0 || index >= activityConfigs.Count) return;
+        if (activityConfigs == null || index < 0 || index >= activityConfigs.Count) return;
 
         var config = activityConfigs[index];
+        if (config == null) return;
 
         if (config.objectsToActivate != null)
         {
@@ -202,7 +230,6 @@ public class GameManager: MonoBehaviour
         }
     }
 
-    /// Desactiva todas las actividades en la lista para que solo una se active al iniciar.
     private void DeactivateAllActivities()
     {
         foreach (var activity in activities)
@@ -214,17 +241,30 @@ public class GameManager: MonoBehaviour
         }
     }
 
+    // ✅ FIX PRINCIPAL: Verificación de null en HandleActivityComplete
     private void HandleActivityComplete()
     {
-        currentActivity.OnActivityComplete -= HandleActivityComplete;
+        // ✅ FIX: Verificar que currentActivity no sea null antes de usarlo
+        if (currentActivity != null)
+        {
+            currentActivity.OnActivityComplete -= HandleActivityComplete;
+        }
+        else
+        {
+            Debug.LogWarning("[GameManager] HandleActivityComplete llamado pero currentActivity es NULL. " +
+                           "Esto puede ocurrir si la actividad no fue iniciada por GameManager.");
+        }
 
         string scene = SceneManager.GetActiveScene().name;
 
         // 1) Local (PlayerPrefs)
         CompletionService.MarkActivity(scene, currentActivityIndex);
 
-        // 2) 🔥 REMOTO (Firestore)
-        ProgressService.Instance.CommitMedal(scene, currentActivityIndex);
+        // 2) REMOTO (Firestore)
+        if (ProgressService.Instance != null)
+        {
+            ProgressService.Instance.CommitMedal(scene, currentActivityIndex);
+        }
 
         // Notificar progreso
         OnSceneProgressChanged?.Invoke(scene);
@@ -252,7 +292,6 @@ public class GameManager: MonoBehaviour
         StartNextActivity();
     }
 
-
     public void ReturnToMenu()
     {
         // Limpiar el ActivityLauncher si existe
@@ -261,39 +300,58 @@ public class GameManager: MonoBehaviour
             Destroy(ActivityLauncher.Instance.gameObject);
         }
 
-        // Ejecutar fade de salida
-        fadePanel.DOFade(1, fadeDuration).OnComplete(() =>
+        // ✅ FIX: Verificar fadePanel antes de usar
+        if (fadePanel != null)
         {
+            fadePanel.DOFade(1, fadeDuration).OnComplete(() =>
+            {
+                Time.timeScale = 1;
+                DOTween.KillAll();
+                Destroy(gameObject);
+                LoadingScreen.LoadScene("Menu");
+            });
+        }
+        else
+        {
+            // Fallback si no hay fadePanel
             Time.timeScale = 1;
             DOTween.KillAll();
             Destroy(gameObject);
             LoadingScreen.LoadScene("Menu");
-        });
+        }
     }
 
     public void ReturnToMenuImmediate()
     {
         // 1. Detener sonidos/tweens primero
         DOTween.KillAll();
-        Time.timeScale = 1; // Asegurar que el tiempo esté normalizado
+        Time.timeScale = 1;
 
-        // 2. Limpiar el ActivityLauncher si existe (para evitar duplicados)
+        // 2. Limpiar el ActivityLauncher si existe
         if (ActivityLauncher.Instance != null)
         {
             Destroy(ActivityLauncher.Instance.gameObject);
         }
 
         // 3. Cargar el menú con fade out
-        fadePanel.DOFade(1, fadeDuration).OnComplete(() =>
+        if (fadePanel != null)
         {
-            Destroy(gameObject); // Destruir GameManager
+            fadePanel.DOFade(1, fadeDuration).OnComplete(() =>
+            {
+                Destroy(gameObject);
+                LoadingScreen.LoadScene("Menu");
+            });
+        }
+        else
+        {
+            Destroy(gameObject);
             LoadingScreen.LoadScene("Menu");
-        });
+        }
     }
 
     public string GetCurrentActivityName()
     {
-        if (currentActivityIndex < activities.Count)
+        if (currentActivityIndex >= 0 && currentActivityIndex < activities.Count && activities[currentActivityIndex] != null)
         {
             return activities[currentActivityIndex].name;
         }
@@ -305,83 +363,46 @@ public class GameManager: MonoBehaviour
     /// </summary>
     public void TogglePause()
     {
-        if (SoundManager.Instance.IsInstructionPlaying()) // 🔹 No se puede pausar si hay instrucciones activas
-        {
-            Debug.Log("No se puede pausar mientras hay instrucciones en reproducción.");
-            return;
-        }
-
-        var grabador = FindObjectOfType<VoiceRecorder>();
-        if (grabador != null && grabador.IsRecording)
-        {
-            Debug.Log("No se puede pausar mientras se graba audio.");
-            return;
-        }
-
         isPaused = !isPaused;
-        pausePanel.SetActive(isPaused);
-        Time.timeScale = isPaused ? 0 : 1;
 
-        pauseButton.SetActive(!isPaused); // 🔹 Oculta el botón de pausa cuando se pausa el juego
-        resumeButton.SetActive(isPaused); // 🔹 Muestra el botón de reanudar cuando se pausa
-    }
-
-    /// <summary>
-    /// Reinicia el nivel con animación de fade in/out.
-    /// </summary>
-    public void RestartLevel()
-    {
-        Time.timeScale = 1;
-        StartCoroutine(LoadSceneWithFade(SceneManager.GetActiveScene().name));
-    }
-
-    /// <summary>
-    /// Carga una escena con efecto de fade in/out.
-    /// </summary>
-    private System.Collections.IEnumerator LoadSceneWithFade(string sceneName)
-    {
-        fadePanel.DOFade(1, fadeDuration).SetUpdate(true);
-        yield return new WaitForSeconds(fadeDuration);
-        LoadingScreen.LoadScene(sceneName);
-    }
-
-    public void StartActivityByIndex(int index)
-    {
-        if (index < 0 || index >= activities.Count)
+        if (isPaused)
         {
-            Debug.LogError($"Índice {index} fuera de rango");
-            return;
+            Time.timeScale = 0;
+            if (pausePanel != null) pausePanel.SetActive(true);
+            if (pauseButton != null) pauseButton.SetActive(false);
+            if (resumeButton != null) resumeButton.SetActive(true);
         }
+        else
+        {
+            Time.timeScale = 1;
+            if (pausePanel != null) pausePanel.SetActive(false);
+            if (pauseButton != null) pauseButton.SetActive(true);
+            if (resumeButton != null) resumeButton.SetActive(false);
+        }
+    }
 
-        // Siempre usar el índice proporcionado
-        currentActivityIndex = index;
-
-        // Reiniciar la actividad
-        DeactivateAllActivities();
-        ApplyActivityConfig(index);
-
-        currentActivity = activities[index];
-        currentActivity.gameObject.SetActive(true);
-        currentActivity.OnActivityComplete += HandleActivityComplete;
-
-        cameraController?.InitializeCameraPosition(currentActivity.startCameraPosition);
-        OnActivityChange?.Invoke(index);
-        currentActivity.StartActivity();
+    public void ResumeGame()
+    {
+        isPaused = false;
+        Time.timeScale = 1;
+        if (pausePanel != null) pausePanel.SetActive(false);
+        if (pauseButton != null) pauseButton.SetActive(true);
+        if (resumeButton != null) resumeButton.SetActive(false);
     }
 
     private void OnDestroy()
     {
-        // Limpieza preventiva de tweens
-        if (fadePanel != null)
-        {
-            fadePanel.DOKill();
-        }
-
-        // Cancelar suscripciones a eventos
+        // Limpiar suscripciones
         if (SoundManager.Instance != null)
         {
             SoundManager.Instance.OnInstructionStart -= DisablePauseButton;
             SoundManager.Instance.OnInstructionEnd -= EnablePauseButton;
+        }
+
+        // Desuscribirse de la actividad actual si existe
+        if (currentActivity != null)
+        {
+            currentActivity.OnActivityComplete -= HandleActivityComplete;
         }
     }
 }

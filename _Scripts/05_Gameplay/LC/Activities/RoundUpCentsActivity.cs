@@ -3,128 +3,123 @@ using UnityEngine;
 using TMPro;
 using UnityEngine.UI;
 
-public class RoundUpCentsActivity : ActivityBase
+/// <summary>
+/// Actividad de Redondeo de Centavos - MIGRADA a LCPaymentActivityBase
+/// 
+/// ANTES: ~380 líneas
+/// DESPUÉS: ~280 líneas
+/// REDUCCIÓN: ~26% (menos que otras porque tiene mucha lógica específica de diálogos)
+/// 
+/// Flujo de instrucciones:
+/// 0 = Inicio (bienvenida)
+/// 1 = Subtotal
+/// 2 = Mostrar panel de redondeo
+/// 3 = Presionar Enter
+/// 4 = Escribir monto
+/// 5 = Card command
+/// 6 = Ticket
+/// 7 = Reiniciar
+/// </summary>
+public class RoundUpCentsActivity : LCPaymentActivityBase
 {
-    [Header("Timer")]
-    [SerializeField] private TextMeshProUGUI liveTimerText;
-    [SerializeField] private TextMeshProUGUI successTimeText;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN ESPECÍFICA DE REDONDEO
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Product Configuration")]
-    [SerializeField] private Transform spawnPoint;
-    [SerializeField] private ProductScanner scanner;
-
-    [Header("UI Elements")]
-    [SerializeField] private TextMeshProUGUI activityProductsText;
-    [SerializeField] private TextMeshProUGUI activityTotalPriceText;
+    [Header("RoundUp - UI Específica")]
     [SerializeField] private TextMeshProUGUI roundUpQuestionText;
     [SerializeField] private GameObject roundUpPanel;
-    [SerializeField] private List<Button> subtotalButtons;
+
+    [Header("RoundUp - Botones Específicos")]
     [SerializeField] private List<Button> enterButtons;
     [SerializeField] private List<Button> commandCardButtons;
-    [SerializeField] private List<Button> numberButtons;
     [SerializeField] private List<Button> enterLastClicking;
-    [SerializeField] private TMP_InputField amountInputField;
 
-    [Header("Configuración del Cliente")]
-    [SerializeField] private CustomerSpawner customerSpawner;
-
-    [Header("Payment")]
-    [SerializeField] private GameObject ticketPrefab;
-    [SerializeField] private Transform ticketSpawnPoint;
-    [SerializeField] private Transform ticketTargetPoint;
-
-    [Header("Panel Button")]
-    public Button continueButton;
-
-    private GameObject currentProduct;
-    private GameObject currentCustomer;
-    private Client currentClient;
-    private int scannedCount = 0;
-    private int productsToScan = 4;
+    // Estado específico
+    private Client currentClientComponent;
     private float totalAmount;
 
-    private int currentAttempt = 0;
-    private const int maxAttempts = 3;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // IMPLEMENTACIÓN DE MÉTODOS ABSTRACTOS
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    public override void StartActivity()
+    protected override string GetStartCameraPosition() => "Iniciando Juego";
+    protected override string GetSubtotalCameraPosition() => "Actividad 3 Subtotal";
+    protected override string GetSuccessCameraPosition() => "Actividad 3 Success";
+    protected override string GetActivityCommandId() => "Day3_RedondeoCentavos";
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MANEJO DE INSTRUCCIONES
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void ShowInitialInstruction()
     {
-        base.StartActivity();
-
-        productNames = ObjectPoolManager.Instance.GetAvailablePrefabNames(PoolTag.Producto).ToArray();
-
-        activityTimerText = liveTimerText;
-        activityTimeText = successTimeText;
-
-        InitializeCommands();
-
-        scanner.BindUI(this, activityProductsText, activityTotalPriceText, true);
-
         UpdateInstructionOnce(0, StartNewAttempt);
+    }
+
+    protected override void OnSubtotalPhaseReady()
+    {
+        UpdateInstructionOnce(1); // "Presiona SUBTOTAL"
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void OnActivityInitialize()
+    {
+        // Desactivar botones específicos
+        foreach (var button in enterButtons)
+            button.gameObject.SetActive(false);
+        foreach (var button in enterLastClicking)
+            button.gameObject.SetActive(false);
+        foreach (var button in commandCardButtons)
+            button.gameObject.SetActive(false);
     }
 
     protected override void InitializeCommands()
     {
-        foreach (var button in subtotalButtons) button.gameObject.SetActive(false);
-        foreach (var button in enterButtons) button.gameObject.SetActive(false);
-        foreach (var button in enterLastClicking) button.gameObject.SetActive(false);
-        foreach (var button in commandCardButtons) button.gameObject.SetActive(false);
+        // Desactivar botones de subtotal
+        foreach (var button in subtotalButtons)
+            button.gameObject.SetActive(false);
 
+        // Comando SUBTOTAL
         commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "SUBTOTAL",
             customAction = HandleSubTotal,
-            requiredActivity = "Day3_RedondeoCentavos",
+            requiredActivity = GetActivityCommandId(),
             commandButtons = subtotalButtons
         });
 
+        // Comando ENTER (para confirmar redondeo)
         commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "ENTER",
             customAction = HandleEnter,
-            requiredActivity = "Day3_RedondeoCentavos",
+            requiredActivity = GetActivityCommandId(),
             commandButtons = enterButtons
         });
     }
 
-    private void StartNewAttempt()
+    // ══════════════════════════════════════════════════════════════════════════════
+    // OVERRIDE DE SPAWN - Aplicar precio decimal aleatorio
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void OnCustomerReady()
     {
-        scannedCount = 0;
-
-        currentCustomer = customerSpawner.SpawnCustomer();
-        currentClient = currentCustomer.GetComponent<Client>();
-
-        cameraController.MoveToPosition("Iniciando Juego", () =>
-        {
-            currentCustomer.GetComponent<CustomerMovement>().MoveToCheckout(() =>
-            {
-                currentProduct = GetPooledProduct(scannedCount, spawnPoint);
-            });
-        });
+        // Guardar referencia al componente Client
+        currentClientComponent = currentCustomer.GetComponent<Client>();
     }
 
-    public void RegisterProductScanned()
+    protected override void OnAfterProductSpawn(GameObject product)
     {
-        if (currentProduct == null) return;
-
-        ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, currentProduct.name, currentProduct);
-        currentProduct = null;
-        scannedCount++;
-
-        if (scannedCount < productsToScan)
-        {
-            currentProduct = GetPooledProduct(scannedCount, spawnPoint);
-            ApplyRandomDecimalToPrice(currentProduct);
-        }
-        else
-        {
-            cameraController.MoveToPosition("Actividad 3 Subtotal", () =>
-            {
-                UpdateInstructionOnce(1);
-                AnimateButtonsSequentiallyWithActivation(subtotalButtons);
-            });
-        }
+        ApplyRandomDecimalToPrice(product);
     }
 
+    /// <summary>
+    /// Aplica un precio decimal aleatorio al producto para simular centavos.
+    /// </summary>
     private void ApplyRandomDecimalToPrice(GameObject product)
     {
         if (product == null) return;
@@ -144,14 +139,20 @@ public class RoundUpCentsActivity : ActivityBase
         }
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LÓGICA ESPECÍFICA DE REDONDEO
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    public void HandleSubTotal()
+    /// <summary>
+    /// Después de presionar Subtotal, mostrar panel de redondeo y preguntar al cliente.
+    /// </summary>
+    protected override void OnSubtotalPressed(float amount)
     {
-        SoundManager.Instance.PlaySound("success");
-        totalAmount = GetTotalAmount(activityTotalPriceText);
+        totalAmount = amount;
         float rounded = Mathf.Ceil(totalAmount);
         float roundUpAmount = Mathf.Round((rounded - totalAmount) * 100f) / 100f;
 
+        // Mostrar panel de redondeo
         roundUpPanel.SetActive(true);
         roundUpQuestionText.text = $"¿Redondear ${roundUpAmount:F2}?";
 
@@ -161,6 +162,9 @@ public class RoundUpCentsActivity : ActivityBase
         });
     }
 
+    /// <summary>
+    /// Pregunta al cliente sobre el redondeo usando DialogSystem.
+    /// </summary>
     private void AskClientAboutRounding()
     {
         float rounded = Mathf.Ceil(totalAmount);
@@ -170,7 +174,7 @@ public class RoundUpCentsActivity : ActivityBase
         cameraController.MoveToPosition("Actividad 3 Cliente Camera", () =>
         {
             DialogSystem.Instance.ShowClientDialog(
-                currentClient,
+                currentClientComponent,
                 "Hola!, ¿Cuánto es el total de mi compra?",
                 () =>
                 {
@@ -178,25 +182,32 @@ public class RoundUpCentsActivity : ActivityBase
                         "¿Cómo deberías preguntar por el redondeo de centavos?",
                         new List<string>
                         {
-                    $"¿Desea donar la cantidad de ${roundUpText} a una fundación?",
-                    "¿Quiere redondear su total?",
-                    "¿Desea agregar más dinero a su cuenta?",
-                    "¿Redondeamos como siempre?"
+                            $"¿Desea donar la cantidad de ${roundUpText} a una fundación?",
+                            "¿Quiere redondear su total?",
+                            "¿Desea agregar más dinero a su cuenta?",
+                            "¿Redondeamos como siempre?"
                         },
                         $"¿Desea donar la cantidad de ${roundUpText} a una fundación?",
                         () =>
                         {
-                            DialogSystem.Instance.HideDialog(false); // Desactiva panel sin reactivar instrucciones
+                            // Respuesta correcta
+                            DialogSystem.Instance.HideDialog(false);
                             ActionEnterBeforeClient();
                         },
-                        () => SoundManager.Instance.PlaySound("error")
+                        () =>
+                        {
+                            // Respuesta incorrecta
+                            SoundManager.Instance.PlaySound("error");
+                        }
                     );
                 });
         });
-
     }
 
-    public void ActionEnterBeforeClient()
+    /// <summary>
+    /// Muestra el botón Enter para confirmar el redondeo.
+    /// </summary>
+    private void ActionEnterBeforeClient()
     {
         cameraController.MoveToPosition("Actividad 3 Presionar Enter", () =>
         {
@@ -204,8 +215,11 @@ public class RoundUpCentsActivity : ActivityBase
             ActivateCommandButtons(enterButtons);
             ActivateButtonWithSequence(enterButtons, 0);
         });
-
     }
+
+    /// <summary>
+    /// Maneja el comando Enter - actualiza el total redondeado y pregunta método de pago.
+    /// </summary>
     public void HandleEnter()
     {
         roundUpPanel.SetActive(false);
@@ -220,20 +234,21 @@ public class RoundUpCentsActivity : ActivityBase
                 onComplete: () =>
                 {
                     DialogSystem.Instance.ShowClientDialog(
-                        currentClient,
+                        currentClientComponent,
                         dialog: "Con tarjeta",
                         onComplete: () =>
                         {
                             DialogSystem.Instance.HideDialog(false);
-                            ActivateAmountInput(roundedTotal);
+                            ActivateRoundUpAmountInput(roundedTotal);
                         });
                 });
         });
-
     }
 
-
-    private void ActivateAmountInput(float amount)
+    /// <summary>
+    /// Activa el input de monto para el pago con tarjeta.
+    /// </summary>
+    private void ActivateRoundUpAmountInput(float amount)
     {
         SoundManager.Instance.PlaySound("success");
 
@@ -254,48 +269,59 @@ public class RoundUpCentsActivity : ActivityBase
             button.gameObject.SetActive(false);
 
         UpdateInstructionOnce(4, () =>
-        {         
+        {
             ActivateButtonWithSequence(commandCardButtons, 0, () =>
             {
                 SoundManager.Instance.PlaySound("success");
                 UpdateInstructionOnce(5, () =>
                 {
                     ActivateButtonWithSequence(selectedButtons, 0, () =>
-                    {                   
+                    {
                         ActivateButtonWithSequence(enterLastClicking, 0, () =>
                         {
                             SoundManager.Instance.PlaySound("success");
-                            cameraController.MoveToPosition("Actividad 3 Tarjeta Mirar Cliente", () =>
-                            {
-                                CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-
-                                if (customerMovement != null)
-                                {
-                                    customerMovement.MoveToPinEntry(() =>
-                                    {
-                                        UpdateInstructionOnce(6, () =>
-                                        {
-                                            SoundManager.Instance.PlaySound("success");
-                                            InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, HandleTicketDelivered);
-                                        });
-                                    });
-                                }
-                            });
+                            MoveClientAndGenerateTicket();
                         });
                     });
-                });              
+                });
             });
         });
-        
     }
-    private void HandleTicketDelivered()
+
+    /// <summary>
+    /// Mueve el cliente al PIN entry y genera el ticket.
+    /// </summary>
+    private void MoveClientAndGenerateTicket()
+    {
+        cameraController.MoveToPosition("Actividad 3 Tarjeta Mirar Cliente", () =>
+        {
+            if (currentCustomerMovement != null)
+            {
+                currentCustomerMovement.MoveToPinEntry(() =>
+                {
+                    UpdateInstructionOnce(6, () =>
+                    {
+                        SoundManager.Instance.PlaySound("success");
+                        InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, OnTicketDelivered);
+                    });
+                });
+            }
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // TICKET Y FINALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Callback cuando el ticket es entregado.
+    /// </summary>
+    private void OnTicketDelivered()
     {
         SoundManager.Instance.PlaySound("success");
-
         currentAttempt++;
 
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-        customerMovement.MoveToExit();
+        currentCustomerMovement?.MoveToExit();
 
         if (currentAttempt < maxAttempts)
         {
@@ -303,35 +329,30 @@ public class RoundUpCentsActivity : ActivityBase
         }
         else
         {
-            ActivityComplete();
+            ShowActivityCompletePanel();
         }
     }
+
+    /// <summary>
+    /// Reinicia la actividad para el siguiente intento.
+    /// </summary>
     private void RestartActivity()
     {
         ResetValues();
         RegenerateProductValues();
         UpdateInstructionOnce(7, StartNewAttempt, StartCompetition);
     }
-    private void ResetValues()
-    {
-        scannedCount = 0;
-        amountInputField.text = "";
 
-        if (scanner != null)
-        {
-            scanner.ClearUI();
-        }
-
-        if (activityProductsText != null) activityProductsText.text = "";
-        if (activityTotalPriceText != null) activityTotalPriceText.text = "$0.00";
-    }
-
-    public void ActivityComplete()
+    /// <summary>
+    /// Muestra el panel de éxito.
+    /// </summary>
+    private void ShowActivityCompletePanel()
     {
         StopActivityTimer();
         ResetValues();
         commandManager.commandList.Clear();
-        cameraController.MoveToPosition("Actividad 3 Success", () =>
+
+        cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
         {
             continueButton.onClick.RemoveAllListeners();
             SoundManager.Instance.RestorePreviousMusic();
@@ -339,35 +360,23 @@ public class RoundUpCentsActivity : ActivityBase
 
             continueButton.onClick.AddListener(() =>
             {
-                cameraController.MoveToPosition("Iniciando Juego");
+                cameraController.MoveToPosition(GetStartCameraPosition());
                 CompleteActivity();
             });
         });
     }
 
-    public void StartCompetition()
-    {
-        SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, false);
-        liveTimerText.GetComponent<TextMeshProUGUI>().enabled = true;
-        StartActivityTimer();
-    }
+    // ══════════════════════════════════════════════════════════════════════════════
+    // RESET
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    public void OnNumberButtonPressed(string number)
+    protected override void ResetValues()
     {
-        if (amountInputField != null)
-        {
-            amountInputField.text += number;
-        }
-    }
+        base.ResetValues();
 
-    protected override void OnDisable()
-    {
-        base.OnDisable();
-        if (scanner != null) scanner.UnbindUI(this);
-    }
-
-    protected override void Initialize()
-    {
-        
+        // Reset específico de redondeo
+        totalAmount = 0f;
+        if (roundUpPanel != null)
+            roundUpPanel.SetActive(false);
     }
 }

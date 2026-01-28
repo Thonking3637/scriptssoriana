@@ -21,6 +21,9 @@ public class LoadingScreen : MonoBehaviour
     [SerializeField] private float fadeOutDuration = 0.4f;
     [SerializeField] private bool cleanupMemory = true;
 
+    [Header("Escena por defecto (al iniciar el juego)")]
+    [SerializeField] private string defaultScene = "Menu";
+
     [Header("Textos localizables")]
     [SerializeField] private string loadingFormat = "Cargando... {0}%";
     [SerializeField] private string readyText = "¡Listo!";
@@ -120,10 +123,17 @@ public class LoadingScreen : MonoBehaviour
     {
         if (_isLoading) return;
 
+        // Si no hay escena destino, usar la escena por defecto
         if (string.IsNullOrWhiteSpace(_nextScene))
         {
-            Debug.LogWarning("[LoadingScreen] No hay escena destino definida.");
-            return;
+            if (string.IsNullOrWhiteSpace(defaultScene))
+            {
+                Debug.LogError("[LoadingScreen] No hay escena destino ni escena por defecto definida.");
+                return;
+            }
+
+            Debug.Log($"[LoadingScreen] Usando escena por defecto: {defaultScene}");
+            _nextScene = defaultScene;
         }
 
         if (_loadCoroutine != null)

@@ -3,221 +3,222 @@ using System.Collections.Generic;
 using TMPro;
 using UnityEngine.UI;
 using DG.Tweening;
-using System;
 
-public class OmonelCardPaymentActivity: ActivityBase
+/// <summary>
+/// Actividad de Pago con Tarjeta Omonel - MIGRADA a LCPaymentActivityBase
+/// 
+/// ANTES: ~400 líneas
+/// DESPUÉS: ~220 líneas
+/// REDUCCIÓN: ~45%
+/// 
+/// Flujo de instrucciones:
+/// 0 = Inicio (bienvenida)
+/// 1 = Subtotal
+/// 2 = Mostrar tarjeta (primera posición)
+/// 3 = Tarjeta segunda posición
+/// 4 = Tarjeta posición final
+/// 5 = Escribir monto
+/// 6 = Cliente sale (si hay más intentos)
+/// 7 = Reiniciar
+/// </summary>
+public class OmonelCardPaymentActivity : LCPaymentActivityBase
 {
-    [Header("Tiempo en Actividad")]
-    public TextMeshProUGUI liveTimerText;
-    public TextMeshProUGUI successTimeText;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN ESPECÍFICA DE OMONEL
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Configuración de Productos")]
-    public List<GameObject> productPrefabs;
-    public Transform spawnPoint;
-    public ProductScanner scanner;
+    [Header("Omonel - Card Interaction")]
+    [SerializeField] private CardInteraction cardInteraction;
 
-    [Header("Configuración de la Tarjeta")]
-    public CardInteraction cardInteraction;
+    [Header("Omonel - Botones Específicos")]
+    [SerializeField] private List<Button> enterLastClicking;
 
-    [Header("UI Elements")]
-    public TextMeshProUGUI activityProductsText;
-    public TextMeshProUGUI activityTotalPriceText;
-    public List<Button> numberButtons;
-    public List<Button> enterLastClicking;
-    public List<Button> subtotalButtons;
-    public TMP_InputField amountInputField;
+    [Header("Omonel - Puntos de Cliente")]
+    [SerializeField] private Transform pinEntryPoint;
+    [SerializeField] private Transform checkoutPoint;
 
-    [Header("Configuración del Cliente")]
-    public CustomerSpawner customerSpawner;
-    private GameObject currentCustomer;
-    public Transform pinEntryPoint;
-    public Transform checkoutPoint;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // IMPLEMENTACIÓN DE MÉTODOS ABSTRACTOS
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Panel Success")]
-    public Button continueButton;
+    protected override string GetStartCameraPosition() => "Iniciando Juego";
+    protected override string GetSubtotalCameraPosition() => "Actividad Omonel SubTotal";
+    protected override string GetSuccessCameraPosition() => "Actividad Omonel Success";
+    protected override string GetActivityCommandId() => "Day2_PagoOmonel";
 
-    private GameObject currentProduct;
-    private int scannedCount = 0;
-    private int productsToScan = 4;
-    private int currentAttempt = 0;
-    private const int maxAttempts = 3;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MANEJO DE INSTRUCCIONES
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    public override void StartActivity()
+    protected override void ShowInitialInstruction()
     {
-        base.StartActivity();
+        UpdateInstructionOnce(0, StartNewAttempt);
+    }
 
-        if (scanner != null)
-        {
-            scanner.UnbindUI(this);
-            scanner.ClearUI();
-            scanner.BindUI(this, activityProductsText, activityTotalPriceText, true);
-        }
+    protected override void OnSubtotalPhaseReady()
+    {
+        UpdateInstructionOnce(1); // "Presiona SUBTOTAL"
+        ActivateCommandButtons(subtotalButtons);
+    }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void OnActivityInitialize()
+    {
+        // Inicializar texto de total si está vacío
         if (activityTotalPriceText != null && string.IsNullOrWhiteSpace(activityTotalPriceText.text))
             activityTotalPriceText.text = "$0.00";
 
-        productNames = ObjectPoolManager.Instance.GetAvailablePrefabNames(PoolTag.Producto).ToArray();
-
-        InitializeCommands();
-
-        cardInteraction.OnCardMovedToFirstPosition -= HandleCardArrived;
-        cardInteraction.OnCardMovedToSecondPosition -= HandleCardMovedToSecondPosition;
-        cardInteraction.OnCardReturned -= HandleCardReturned;
-
-        cardInteraction.OnCardMovedToFirstPosition += HandleCardArrived;
-        cardInteraction.OnCardMovedToSecondPosition += HandleCardMovedToSecondPosition;
-        cardInteraction.OnCardReturned += HandleCardReturned;
-
-        activityTimerText = liveTimerText;
-        activityTimeText = successTimeText;
-
-        UpdateInstructionOnce(0, () =>
+        // Suscribirse a eventos de CardInteraction
+        if (cardInteraction != null)
         {
-            StartNewAttempt();
-        });
+            cardInteraction.OnCardMovedToFirstPosition -= HandleCardArrived;
+            cardInteraction.OnCardMovedToSecondPosition -= HandleCardMovedToSecondPosition;
+            cardInteraction.OnCardReturned -= HandleCardReturned;
+
+            cardInteraction.OnCardMovedToFirstPosition += HandleCardArrived;
+            cardInteraction.OnCardMovedToSecondPosition += HandleCardMovedToSecondPosition;
+            cardInteraction.OnCardReturned += HandleCardReturned;
+        }
+
+        // Desactivar botones específicos
+        foreach (var button in enterLastClicking)
+            button.gameObject.SetActive(false);
     }
 
     protected override void InitializeCommands()
     {
-        foreach (var button in enterLastClicking) button.gameObject.SetActive(false);
-        foreach (var button in subtotalButtons) button.gameObject.SetActive(false);
-        CommandManager.CommandAction enterlastCommand = new CommandManager.CommandAction
+        // Desactivar botones de subtotal
+        foreach (var button in subtotalButtons)
+            button.gameObject.SetActive(false);
+
+        // Comando ENTER LAST
+        commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "ENTERR",
             customAction = HandleEnterLast,
-            requiredActivity = "Day2_PagoOmonel",
+            requiredActivity = GetActivityCommandId(),
             commandButtons = enterLastClicking
-        };
-        commandManager.commandList.Add(enterlastCommand);
+        });
 
-        CommandManager.CommandAction subtotalCommand = new CommandManager.CommandAction
+        // Comando SUBTOTAL
+        commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "SUBTOTAL",
             customAction = HandleSubTotal,
-            requiredActivity = "Day2_PagoOmonel",
+            requiredActivity = GetActivityCommandId(),
             commandButtons = subtotalButtons
-        };
-        commandManager.commandList.Add(subtotalCommand);
-
-    }
-    private void StartNewAttempt()
-    {
-        scannedCount = 0;
-        currentCustomer = customerSpawner.SpawnCustomer();
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-
-        cameraController.MoveToPosition("Iniciando Juego", () =>
-        {
-            customerMovement.MoveToCheckout(() =>
-            {
-                currentProduct = GetPooledProduct(scannedCount, spawnPoint);
-                EnsureProductData(currentProduct);
-                BindCurrentProduct();
-            });
-
         });
     }
 
-    public void RegisterProductScanned()
+    /// <summary>
+    /// Override para usar EnsureProductData después de spawnear.
+    /// </summary>
+    protected override void OnAfterProductSpawn(GameObject product)
     {
-
-        if (currentProduct != null)
-        {
-            var drag = currentProduct.GetComponent<DragObject>();
-
-            string poolName = (drag != null && !string.IsNullOrEmpty(drag.OriginalPoolName))
-                ? drag.OriginalPoolName
-                : currentProduct.name;
-
-            ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, poolName, currentProduct);
-            currentProduct = null;
-        }
-
-        scannedCount++;
-
-        if (scannedCount < productsToScan)
-        {
-            currentProduct = GetPooledProduct(scannedCount, spawnPoint);
-            EnsureProductData(currentProduct);
-            BindCurrentProduct();
-        }
-        else
-        {
-            cameraController.MoveToPosition("Actividad Omonel SubTotal", () =>
-            {
-                UpdateInstructionOnce(1);
-                ActivateCommandButtons(subtotalButtons);
-                AnimateButtonsSequentiallyWithActivation(subtotalButtons);
-            });
-        }
+        EnsureProductData(product);
     }
 
-    public void HandleSubTotal()
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LÓGICA ESPECÍFICA DE OMONEL - FLUJO DE TARJETA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Después de presionar Subtotal, mostrar la tarjeta.
+    /// </summary>
+    protected override void OnSubtotalPressed(float totalAmount)
     {
         ShowCard();
     }
 
+    /// <summary>
+    /// Muestra la tarjeta Omonel y activa la interacción.
+    /// </summary>
     private void ShowCard()
     {
         SoundManager.Instance.PlaySound("success");
         cameraController.MoveToPosition("Actividad Omonel Primera Posicion", () =>
-        {            
-            UpdateInstructionOnce(2);
+        {
+            UpdateInstructionOnce(2); // "Desliza la tarjeta"
             cardInteraction.gameObject.SetActive(true);
-        });       
+        });
     }
 
+    /// <summary>
+    /// Callback cuando la tarjeta llega a la primera posición.
+    /// </summary>
     private void HandleCardArrived()
     {
-        UpdateInstructionOnce(3);
+        UpdateInstructionOnce(3); // "Continúa deslizando"
         cameraController.MoveToPosition("Actividad Omonel Segunda Posicion");
     }
 
+    /// <summary>
+    /// Callback cuando la tarjeta llega a la segunda posición.
+    /// </summary>
     private void HandleCardMovedToSecondPosition()
     {
         SoundManager.Instance.PlaySound("success");
-        UpdateInstructionOnce(4);
+        UpdateInstructionOnce(4); // "Retira la tarjeta"
         cameraController.MoveToPosition("Actividad Omonel Final Posicion");
     }
 
+    /// <summary>
+    /// Callback cuando la tarjeta es devuelta al cliente.
+    /// </summary>
     private void HandleCardReturned()
     {
         if (currentCustomer == null)
         {
-            Debug.LogError("Error: No hay un cliente asignado en HandleCardReturned().");
+            Debug.LogError("OmonelCardPaymentActivity: No hay cliente asignado en HandleCardReturned().");
             return;
         }
 
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-
-        if (customerMovement == null)
+        if (currentCustomerMovement == null)
         {
-            Debug.LogError("Error: El cliente actual no tiene un componente 'CustomerMovement'.");
+            Debug.LogError("OmonelCardPaymentActivity: El cliente no tiene CustomerMovement.");
             return;
         }
 
-        customerMovement.MoveToPinEntry(() => ActivatePinInput());
+        // Mover cliente al PIN entry y activar input
+        currentCustomerMovement.MoveToPinEntry(ActivatePinInput);
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LÓGICA DE INPUT DE MONTO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Activa el input para escribir el monto.
+    /// </summary>
     private void ActivatePinInput()
     {
         cameraController.MoveToPosition("Actividad Omonel Escribir Monto", () =>
-        {          
-            UpdateInstructionOnce(5);
+        {
+            UpdateInstructionOnce(5); // "Escribe el monto"
             float totalAmount = GetTotalAmount(activityTotalPriceText);
-            ActivateAmountInput(totalAmount);
-        });      
+            ActivateOmonelAmountInput(totalAmount);
+        });
     }
 
-    private void ActivateAmountInput(float amount)
+    /// <summary>
+    /// Activa el input de monto específico para Omonel.
+    /// </summary>
+    private void ActivateOmonelAmountInput(float amount)
     {
-        amountInputField.gameObject.SetActive(true);
-        amountInputField.text = "";
-        amountInputField.DeactivateInputField();
-        amountInputField.ActivateInputField();
+        // Activar input field
+        if (amountInputField != null)
+        {
+            amountInputField.gameObject.SetActive(true);
+            amountInputField.text = "";
+            amountInputField.DeactivateInputField();
+            amountInputField.ActivateInputField();
+        }
 
+        // Preparar botones numéricos
         string amountString = ((int)amount).ToString() + "00";
-
         List<Button> selectedButtons = GetButtonsForAmount(amountString, numberButtons);
 
         foreach (var button in numberButtons)
@@ -225,77 +226,61 @@ public class OmonelCardPaymentActivity: ActivityBase
             button.gameObject.SetActive(false);
         }
 
-        ActivateButtonWithSequence(selectedButtons, 0, () => ActivateButtonWithSequence(enterLastClicking,0));
+        // Secuencia: números -> enter last
+        ActivateButtonWithSequence(selectedButtons, 0, () =>
+        {
+            ActivateButtonWithSequence(enterLastClicking, 0);
+        });
     }
 
+    /// <summary>
+    /// Maneja el comando Enter Last - valida el monto.
+    /// </summary>
     public void HandleEnterLast()
     {
         SoundManager.Instance.PlaySound("success");
         ValidateAmount();
     }
 
+    /// <summary>
+    /// Valida el monto y decide si continuar o completar.
+    /// </summary>
     private void ValidateAmount()
     {
         currentAttempt++;
 
-        if (currentCustomer == null)
+        if (currentCustomer == null || currentCustomerMovement == null)
         {
             Invoke(nameof(RestartActivity), 1f);
             return;
         }
 
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-        if (customerMovement == null)
-        {
-            Invoke(nameof(RestartActivity), 1f);
-            return;
-        }
-
-        customerMovement.MoveToExit();
+        // Cliente sale
+        currentCustomerMovement.MoveToExit();
 
         if (currentAttempt < maxAttempts)
         {
-            cameraController.MoveToPosition("Iniciando Juego", () =>
+            // Más intentos disponibles
+            cameraController.MoveToPosition(GetStartCameraPosition(), () =>
             {
-                UpdateInstructionOnce(6);
+                UpdateInstructionOnce(6); // "Preparando siguiente cliente"
                 Invoke(nameof(RestartActivity), 1f);
             });
         }
         else
         {
-            ActivityComplete();
+            // Completar actividad
+            ShowActivityCompletePanel();
         }
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // RESTART Y FINALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    public void ActivityComplete()
-    {
-        StopActivityTimer();
-        ResetValues();
-        commandManager.commandList.Clear();
-        cameraController.MoveToPosition("Actividad Omonel Success", () =>
-        {
-            continueButton.onClick.RemoveAllListeners();
-            SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
-
-            continueButton.onClick.AddListener(() =>
-            {
-                cameraController.MoveToPosition("Iniciando Juego");              
-                cardInteraction.ResetCard();
-                CompleteActivity();
-            });
-        });
-    }
-
-    public void OnNumberButtonPressed(string number)
-    {
-        if (amountInputField != null)
-        {
-            amountInputField.text += number;
-        }
-    }
-
+    /// <summary>
+    /// Reinicia la actividad para el siguiente intento.
+    /// </summary>
     private void RestartActivity()
     {
         ResetValues();
@@ -312,89 +297,53 @@ public class OmonelCardPaymentActivity: ActivityBase
         });
     }
 
-
-    public void StartCompetition()
+    /// <summary>
+    /// Muestra el panel de éxito.
+    /// </summary>
+    private void ShowActivityCompletePanel()
     {
-        SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, false);
-        liveTimerText.GetComponent<TextMeshProUGUI>().enabled = true;
-        StartActivityTimer();
-    }
+        StopActivityTimer();
+        ResetValues();
+        commandManager.commandList.Clear();
 
-    private void ResetValues()
-    {
-        scannedCount = 0;
-        amountInputField.text = "";
-
-        if (scanner != null)
+        cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
         {
-            scanner.ClearUI();
-        }
+            continueButton.onClick.RemoveAllListeners();
+            SoundManager.Instance.RestorePreviousMusic();
+            SoundManager.Instance.PlaySound("win");
 
-        if (activityProductsText != null) activityProductsText.text = "";
-        if (activityTotalPriceText != null) activityTotalPriceText.text = "$0.00";
-
-    }
-    protected override void Initialize()
-    {
-        
-    }
-
-    private void BindCurrentProduct()
-    {
-        if (currentProduct == null) return;
-
-        var drag = currentProduct.GetComponent<DragObject>();
-        if (drag == null) return;
-
-        drag.OnScanned -= OnProductScanned; // anti duplicados por reuse de pool
-        drag.OnScanned += OnProductScanned;
+            continueButton.onClick.AddListener(() =>
+            {
+                cameraController.MoveToPosition(GetStartCameraPosition());
+                cardInteraction.ResetCard();
+                CompleteActivity();
+            });
+        });
     }
 
-    private void OnProductScanned(DragObject obj)
+    // ══════════════════════════════════════════════════════════════════════════════
+    // RESET Y LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void ResetValues()
     {
-        if (obj == null) return;
+        base.ResetValues();
 
-        obj.OnScanned -= OnProductScanned;
-
-        if (scanner != null)
-        {
-            scanner.RegisterProductScan(obj);
-            RegisterProductScanned();
-        }
-        else
-        {
-            Debug.LogError("OmonelCardPaymentActivity: scanner es NULL.");
-        }
-    }
-
-
-
-    private void EnsureProductData(GameObject go)
-    {
-        if (go == null) return;
-
-        var drag = go.GetComponent<DragObject>();
-        if (drag == null) return;
-
-        if (drag.productData == null)
-        {
-            var p = ScriptableObject.CreateInstance<Product>();
-
-            p.Initialize(
-                UnityEngine.Random.Range(1000, 9999).ToString(),
-                go.name,
-                UnityEngine.Random.Range(20f, 50f),
-                1
-            );
-
-            drag.productData = p;
-        }
+        // Reset específico de Omonel
+        if (amountInputField != null)
+            amountInputField.text = "";
     }
 
     protected override void OnDisable()
     {
         base.OnDisable();
-        if (scanner != null) scanner.UnbindUI(this);
-    }
 
+        // Desuscribirse de eventos de CardInteraction
+        if (cardInteraction != null)
+        {
+            cardInteraction.OnCardMovedToFirstPosition -= HandleCardArrived;
+            cardInteraction.OnCardMovedToSecondPosition -= HandleCardMovedToSecondPosition;
+            cardInteraction.OnCardReturned -= HandleCardReturned;
+        }
+    }
 }

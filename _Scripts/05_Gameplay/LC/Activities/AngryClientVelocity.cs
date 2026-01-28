@@ -4,115 +4,157 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 
-public class AngryClientVelocity : ActivityBase
+/// <summary>
+/// Actividad de Cliente Molesto (Velocidad) - MIGRADA a LCPaymentActivityBase
+/// 
+/// ANTES: ~450 líneas
+/// DESPUÉS: ~380 líneas
+/// REDUCCIÓN: ~16% (menos que otras porque tiene mucha lógica específica del reto)
+/// 
+/// Flujo especial:
+/// 1. Escanear 3 productos iniciales
+/// 2. Cliente se queja → Diálogo con opciones
+/// 3. Reto cronometrado: escanear N productos en M segundos
+/// 4. Si falla: panel de retry
+/// 5. Si pasa: subtotal → pago con tarjeta → ticket
+/// 
+/// Flujo de instrucciones:
+/// 0 = Inicio
+/// 1 = Diálogo cliente molesto
+/// 2 = Inicio del reto cronometrado
+/// 3 = Subtotal
+/// 4 = Card command
+/// 5 = Escribir monto
+/// 6 = Ticket
+/// 7 = Reiniciar
+/// </summary>
+public class AngryClientVelocity : LCPaymentActivityBase
 {
-    [Header("Timer")]
-    [SerializeField] private TextMeshProUGUI liveTimerText;
-    [SerializeField] private TextMeshProUGUI successTimeText;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN ESPECÍFICA DE ANGRY VELOCITY
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Client & Product")]
-    public CustomerSpawner customerSpawner;
-    public Transform productSpawnPoint;
-    public ProductScanner scanner;
+    [Header("AngryVelocity - UI del Reto")]
+    [SerializeField] private TextMeshProUGUI scannedCountText;
+    [SerializeField] private TextMeshProUGUI remainingTimeText;
+    [SerializeField] private GameObject failPanel;
+    [SerializeField] private Button retryButton;
 
-    [Header("UI")]
-    public TextMeshProUGUI activityProductsText;
-    public TextMeshProUGUI activityTotalPriceText;
-    public TextMeshProUGUI scannedCountText;
-    public TextMeshProUGUI remainingTimeText;
-    public GameObject failPanel;
-    public Button retryButton;
-    public Button continueButton;
+    [Header("AngryVelocity - Botones Específicos")]
+    [SerializeField] private List<Button> commandCardButtons;
+    [SerializeField] private List<Button> enterButtons;
+    [SerializeField] private List<Button> enterLastClicking;
 
-    [Header("Payment")]
-    public TMP_InputField amountInputField;
-    public List<Button> numberButtons;
-    public List<Button> commandCardButtons;
-    public List<Button> enterButtons;
-    public List<Button> enterLastClicking;
-    public List<Button> subtotalButtons;
-    public GameObject ticketPrefab;
-    public Transform ticketSpawnPoint;
-    public Transform ticketTargetPoint;
-
-    private GameObject currentCustomer;
-    private Client currentClient;
-    private GameObject currentProduct;
-    private int scannedCount = 0;
+    // Estado del reto
+    private Client currentClientComponent;
     private int totalToScan;
-    private int currentAttempt = 0;
-    private const int maxAttempts = 3;
     private float currentTime;
     private float maxTime;
     private bool timerActive = false;
     private bool challengeStarted = false;
+    private Coroutine challengeTimerCoroutine;
 
-    private Coroutine timerCoroutine;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // IMPLEMENTACIÓN DE MÉTODOS ABSTRACTOS
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    public override void StartActivity()
+    protected override string GetStartCameraPosition() => "Iniciando Juego";
+    protected override string GetSubtotalCameraPosition() => "Actividad 1 Subtotal";
+    protected override string GetSuccessCameraPosition() => "Actividad 1 Success";
+    protected override string GetActivityCommandId() => "Day4_ClienteMolestoTiempo";
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MANEJO DE INSTRUCCIONES
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void ShowInitialInstruction()
     {
-        base.StartActivity();
+        UpdateInstructionOnce(0, StartNewAttemptAngry);
+    }
 
-        if (scanner != null)
-        {
-            scanner.UnbindUI(this);
-            scanner.ClearUI();
-            scanner.BindUI(this, activityProductsText, activityTotalPriceText, true);
-        }
+    protected override void OnSubtotalPhaseReady()
+    {
+        UpdateInstructionOnce(3); // "Presiona SUBTOTAL"
+    }
 
-        InitializeCommands();
+    // ══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
 
+    protected override void OnActivityInitialize()
+    {
+        // Registrar diálogos de cliente molesto
         RegisterAngryVelocityDialogs();
 
-        productNames = ObjectPoolManager.Instance.GetAvailablePrefabNames(PoolTag.Producto).ToArray();
+        // Desactivar botones específicos
+        foreach (var button in commandCardButtons)
+            button.gameObject.SetActive(false);
+        foreach (var button in enterButtons)
+            button.gameObject.SetActive(false);
+        foreach (var button in enterLastClicking)
+            button.gameObject.SetActive(false);
 
-        activityTimerText = liveTimerText;
-        activityTimeText = successTimeText;
-
-        UpdateInstructionOnce(0, StartNewAttemp);
+        // Ocultar UI del reto
+        if (scannedCountText != null) scannedCountText.enabled = false;
+        if (remainingTimeText != null) remainingTimeText.enabled = false;
+        if (failPanel != null) failPanel.SetActive(false);
     }
 
     protected override void InitializeCommands()
     {
         base.InitializeCommands();
 
-        foreach (var button in subtotalButtons) button.gameObject.SetActive(false);
-        foreach (var button in enterButtons) button.gameObject.SetActive(false);
-        foreach (var button in enterLastClicking) button.gameObject.SetActive(false);
-        foreach (var button in commandCardButtons) button.gameObject.SetActive(false);
+        // Desactivar botones de subtotal
+        foreach (var button in subtotalButtons)
+            button.gameObject.SetActive(false);
 
+        // Comando SUBTOTAL
         commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "SUBTOTAL",
             customAction = HandleSubTotal,
-            requiredActivity = "Day4_ClienteMolestoTiempo",
+            requiredActivity = GetActivityCommandId(),
             commandButtons = subtotalButtons
         });
 
-           commandManager.commandList.Add(new CommandManager.CommandAction
+        // Comando T+B+ENTER_
+        commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "T+B+ENTER_",
             customAction = HandleEnterAmount,
-            requiredActivity = "Day4_ClienteMolestoTiempo",
+            requiredActivity = GetActivityCommandId(),
             commandButtons = commandCardButtons
         });
     }
 
-    private void StartNewAttemp()
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FLUJO INICIAL - 3 PRODUCTOS ANTES DEL RETO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Inicia un nuevo intento (override completo porque el flujo es diferente).
+    /// </summary>
+    private void StartNewAttemptAngry()
     {
         scannedCount = 0;
-        currentCustomer = customerSpawner.SpawnCustomer();
-        currentClient = currentCustomer.GetComponent<Client>();
+        challengeStarted = false;
 
-        cameraController.MoveToPosition("Iniciando Juego", () =>
+        currentCustomer = customerSpawner.SpawnCustomer();
+        currentCustomerMovement = currentCustomer.GetComponent<CustomerMovement>();
+        currentClientComponent = currentCustomer.GetComponent<Client>();
+
+        cameraController.MoveToPosition(GetStartCameraPosition(), () =>
         {
-            currentCustomer.GetComponent<CustomerMovement>().MoveToCheckout(() =>
+            currentCustomerMovement.MoveToCheckout(() =>
             {
                 SpawnNextInitialProduct();
             });
         });
     }
 
+    /// <summary>
+    /// Spawna productos iniciales (3 antes del reto).
+    /// </summary>
     private void SpawnNextInitialProduct()
     {
         if (scannedCount >= 3)
@@ -121,7 +163,7 @@ public class AngryClientVelocity : ActivityBase
             return;
         }
 
-        GameObject next = GetPooledProduct(scannedCount, productSpawnPoint);
+        GameObject next = GetPooledProduct(scannedCount, spawnPoint);
         if (next != null)
         {
             next.SetActive(true);
@@ -130,33 +172,41 @@ public class AngryClientVelocity : ActivityBase
         }
     }
 
-    public void RegisterProductScanned()
+    /// <summary>
+    /// Override del registro de producto escaneado para manejar ambas fases.
+    /// </summary>
+    protected override void RegisterProductScanned()
     {
-        if (currentProduct != null)
-        {
-            var drag = currentProduct.GetComponent<DragObject>();
-            string poolName = (drag != null && !string.IsNullOrEmpty(drag.OriginalPoolName))
-                ? drag.OriginalPoolName
-                : currentProduct.name;
-
-            ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, poolName, currentProduct);
-            currentProduct = null;
-        }
-
+        ReturnCurrentProductToPool();
         scannedCount++;
 
         if (!challengeStarted)
         {
+            // Fase inicial: spawnar siguiente producto o mostrar diálogo
             SpawnNextInitialProduct();
             return;
         }
 
+        // Fase de reto: actualizar contador
         scannedCountText.text = $"{scannedCount} / {totalToScan}";
 
-        if (scannedCount < totalToScan) SpawnNextChallengeProduct();
-        else EndChallenge();
+        if (scannedCount < totalToScan)
+        {
+            SpawnNextChallengeProduct();
+        }
+        else
+        {
+            EndChallenge();
+        }
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // DIÁLOGO DEL CLIENTE MOLESTO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Muestra el diálogo del cliente molesto con opciones.
+    /// </summary>
     private void ShowAngryDialog()
     {
         var entry = DialogSystem.Instance.GetNextComment("angry_velocity");
@@ -167,7 +217,7 @@ public class AngryClientVelocity : ActivityBase
             cameraController.MoveToPosition("Actividad 1 Cliente Camera", () =>
             {
                 DialogSystem.Instance.ShowClientDialog(
-                    currentClient,
+                    currentClientComponent,
                     entry.clientText,
                     () =>
                     {
@@ -187,35 +237,49 @@ public class AngryClientVelocity : ActivityBase
                         }
                     });
             });
-        });       
+        });
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // RETO CRONOMETRADO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Inicia el reto cronometrado.
+    /// </summary>
     private void BeginTimedChallenge()
     {
-        cameraController.MoveToPosition("Iniciando Juego", () =>
+        cameraController.MoveToPosition(GetStartCameraPosition(), () =>
         {
             UpdateInstructionOnce(2, () =>
             {
                 challengeStarted = true;
                 scannedCount = 0;
+
+                // Dificultad aumenta con cada intento
                 totalToScan = 10 + (currentAttempt * 5);
                 maxTime = 15 + (currentAttempt * 5);
+
+                // Mostrar UI del reto
                 scannedCountText.enabled = true;
                 remainingTimeText.enabled = true;
                 scannedCountText.text = $"0 / {totalToScan}";
                 remainingTimeText.text = $"{maxTime:F0}s";
-                StartTimer();
+
+                StartChallengeTimer();
                 SpawnNextChallengeProduct();
             });
         });
     }
 
+    /// <summary>
+    /// Spawna el siguiente producto del reto.
+    /// </summary>
     private void SpawnNextChallengeProduct()
     {
         if (scannedCount < totalToScan)
         {
-            GameObject p = GetPooledProduct(scannedCount % productNames.Length, productSpawnPoint);
-
+            GameObject p = GetPooledProduct(scannedCount % productNames.Length, spawnPoint);
             if (p != null)
             {
                 p.SetActive(true);
@@ -225,17 +289,23 @@ public class AngryClientVelocity : ActivityBase
         }
     }
 
-    private void StartTimer()
+    /// <summary>
+    /// Inicia el timer del reto.
+    /// </summary>
+    private void StartChallengeTimer()
     {
         timerActive = true;
         currentTime = maxTime;
 
-        if (timerCoroutine != null)
-            StopCoroutine(timerCoroutine);
+        if (challengeTimerCoroutine != null)
+            StopCoroutine(challengeTimerCoroutine);
 
-        timerCoroutine = StartCoroutine(UpdateChallengeTimer());
+        challengeTimerCoroutine = StartCoroutine(UpdateChallengeTimer());
     }
 
+    /// <summary>
+    /// Coroutine que actualiza el timer del reto.
+    /// </summary>
     private IEnumerator UpdateChallengeTimer()
     {
         while (currentTime > 0 && timerActive)
@@ -252,14 +322,16 @@ public class AngryClientVelocity : ActivityBase
         }
     }
 
+    /// <summary>
+    /// Termina el reto exitosamente.
+    /// </summary>
     private void EndChallenge()
     {
         timerActive = false;
-
         scannedCountText.enabled = false;
         remainingTimeText.enabled = false;
 
-        cameraController.MoveToPosition("Actividad 1 Subtotal", () =>
+        cameraController.MoveToPosition(GetSubtotalCameraPosition(), () =>
         {
             UpdateInstructionOnce(3, () =>
             {
@@ -267,15 +339,32 @@ public class AngryClientVelocity : ActivityBase
             });
         });
     }
-    public void HandleSubTotal()
+
+    /// <summary>
+    /// Maneja el fallo del reto (tiempo agotado).
+    /// </summary>
+    private void HandleFail()
     {
-        float totalAmount = GetTotalAmount(activityTotalPriceText);
+        failPanel.SetActive(true);
+        SoundManager.Instance.PlaySound("tryagain");
 
-        if (totalAmount <= 0)
-            return;
+        retryButton.onClick.RemoveAllListeners();
+        retryButton.onClick.AddListener(() =>
+        {
+            failPanel.SetActive(false);
+            RestartActivityAngry();
+        });
+    }
 
-        SoundManager.Instance.PlaySound("success");
+    // ══════════════════════════════════════════════════════════════════════════════
+    // PAGO CON TARJETA (DESPUÉS DEL RETO)
+    // ══════════════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Después de presionar Subtotal, pregunta método de pago.
+    /// </summary>
+    protected override void OnSubtotalPressed(float totalAmount)
+    {
         cameraController.MoveToPosition("Actividad 1 Cliente Camera", () =>
         {
             DialogSystem.Instance.ShowClientDialog(
@@ -284,12 +373,12 @@ public class AngryClientVelocity : ActivityBase
                 onComplete: () =>
                 {
                     DialogSystem.Instance.ShowClientDialog(
-                        currentClient,
+                        currentClientComponent,
                         dialog: "Con tarjeta, apurese",
                         onComplete: () =>
                         {
                             DialogSystem.Instance.HideDialog(false);
-                            cameraController.MoveToPosition("Actividad 1 Subtotal", () =>
+                            cameraController.MoveToPosition(GetSubtotalCameraPosition(), () =>
                             {
                                 UpdateInstructionOnce(4);
                                 ActivateButtonWithSequence(commandCardButtons, 0, HandleEnterAmount);
@@ -299,13 +388,19 @@ public class AngryClientVelocity : ActivityBase
         });
     }
 
+    /// <summary>
+    /// Maneja el comando Enter Amount.
+    /// </summary>
     public void HandleEnterAmount()
     {
         float totalAmount = GetTotalAmount(activityTotalPriceText);
-        ActivateAmountInput(totalAmount);
+        ActivateAngryAmountInput(totalAmount);
     }
 
-    private void ActivateAmountInput(float amount)
+    /// <summary>
+    /// Activa el input de monto.
+    /// </summary>
+    private void ActivateAngryAmountInput(float amount)
     {
         SoundManager.Instance.PlaySound("success");
 
@@ -323,139 +418,137 @@ public class AngryClientVelocity : ActivityBase
         List<Button> selectedButtons = GetButtonsForAmount(amountString, numberButtons);
 
         foreach (var button in numberButtons)
-        {
             button.gameObject.SetActive(false);
-        }
+
         UpdateInstructionOnce(5);
         ActivateButtonWithSequence(selectedButtons, 0, () =>
         {
             ActivateButtonWithSequence(enterLastClicking, 0, () =>
             {
-                cameraController.MoveToPosition("Actividad 1 Mirar Cliente", () =>
-                {
-                    CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-                    if (customerMovement != null)
-                    {
-                        customerMovement.MoveToPinEntry(() =>
-                        {
-                            UpdateInstructionOnce(6, () =>
-                            {
-                                InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, HandleTicketDelivered);
-                            });
-                        });
-                    }
-                });
+                MoveClientAndGenerateTicket();
             });
         });
     }
 
-    private void HandleTicketDelivered()
+    /// <summary>
+    /// Mueve el cliente y genera el ticket.
+    /// </summary>
+    private void MoveClientAndGenerateTicket()
+    {
+        cameraController.MoveToPosition("Actividad 1 Mirar Cliente", () =>
+        {
+            if (currentCustomerMovement != null)
+            {
+                currentCustomerMovement.MoveToPinEntry(() =>
+                {
+                    UpdateInstructionOnce(6, () =>
+                    {
+                        InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, OnTicketDelivered);
+                    });
+                });
+            }
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // TICKET Y FINALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Callback cuando el ticket es entregado.
+    /// </summary>
+    private void OnTicketDelivered()
     {
         SoundManager.Instance.PlaySound("success");
-
         currentAttempt++;
 
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-        customerMovement.MoveToExit();
-        
+        currentCustomerMovement?.MoveToExit();
+
         if (currentAttempt < maxAttempts)
         {
-            RestartActivityWithCheck();
+            RestartActivityAngry();
         }
         else
         {
-            ActivityComplete();
+            ShowActivityCompletePanel();
         }
     }
 
-    private void RestartActivityWithCheck()
+    /// <summary>
+    /// Reinicia la actividad.
+    /// </summary>
+    private void RestartActivityAngry()
     {
         ResetValues();
         RegenerateProductValues();
 
         if (currentAttempt > 0)
-            UpdateInstructionOnce(7, StartNewAttemp, StartCompetition);
+            UpdateInstructionOnce(7, StartNewAttemptAngry, StartCompetition);
         else
-            StartNewAttemp();
+            StartNewAttemptAngry();
     }
 
-    private void ActivityComplete()
+    /// <summary>
+    /// Muestra el panel de éxito.
+    /// </summary>
+    private void ShowActivityCompletePanel()
     {
         StopActivityTimer();
         commandManager.commandList.Clear();
         scanner.ClearUI();
-        cameraController.MoveToPosition("Actividad 1 Success", () =>
+
+        cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
         {
             continueButton.onClick.RemoveAllListeners();
             SoundManager.Instance.RestorePreviousMusic();
             SoundManager.Instance.PlaySound("win");
+
             continueButton.onClick.AddListener(() =>
             {
-                cameraController.MoveToPosition("Iniciando Juego");
+                cameraController.MoveToPosition(GetStartCameraPosition());
                 CompleteActivity();
             });
         });
     }
 
-    private void HandleFail()
+    // ══════════════════════════════════════════════════════════════════════════════
+    // RESET Y LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void ResetValues()
     {
-        failPanel.SetActive(true);
-        SoundManager.Instance.PlaySound("tryagain");
+        base.ResetValues();
 
-        retryButton.onClick.RemoveAllListeners();
-        retryButton.onClick.AddListener(() =>
-        {
-            failPanel.SetActive(false);
-            RestartActivityWithCheck();
-        });
-    }
-
-
-    private void ResetValues()
-    {
+        // Reset específico de AngryVelocity
         scannedCountText.enabled = false;
         remainingTimeText.enabled = false;
-
-        scannedCount = 0;
         challengeStarted = false;
-        scannedCountText.text = "0 / 0";
-        remainingTimeText.text = "0s";
-        amountInputField.text = "";
+        timerActive = false;
 
-        if (scanner != null) scanner.ClearUI();
+        if (scannedCountText != null) scannedCountText.text = "0 / 0";
+        if (remainingTimeText != null) remainingTimeText.text = "0s";
 
-        if (currentProduct != null)
+        if (challengeTimerCoroutine != null)
         {
-            ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, currentProduct.name, currentProduct);
-            currentProduct = null;
+            StopCoroutine(challengeTimerCoroutine);
+            challengeTimerCoroutine = null;
         }
 
-        if (currentCustomer != null)
+        // Mover cliente actual a la salida si existe
+        if (currentCustomer != null && currentCustomerMovement != null)
         {
-            CustomerMovement movement = currentCustomer.GetComponent<CustomerMovement>();
-            if (movement != null)
-            {
-                movement.MoveToExit();
-            }
+            currentCustomerMovement.MoveToExit();
             currentCustomer = null;
         }
     }
 
-    public void StartCompetition()
-    {
-        SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, false);
-        liveTimerText.GetComponent<TextMeshProUGUI>().enabled = true;
-        StartActivityTimer();        
-    }
+    // ══════════════════════════════════════════════════════════════════════════════
+    // REGISTRO DE DIÁLOGOS
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    public void OnNumberButtonPressed(string number)
-    {
-        if (amountInputField != null)
-        {
-            amountInputField.text += number;
-        }
-    }
-
+    /// <summary>
+    /// Registra los diálogos del cliente molesto en DialogSystem.
+    /// </summary>
     private void RegisterAngryVelocityDialogs()
     {
         DialogSystem.Instance.customerComments.AddRange(new List<CustomerComment>
@@ -518,29 +611,4 @@ public class AngryClientVelocity : ActivityBase
             }
         });
     }
-
-    private void BindCurrentProduct()
-    {
-        if (currentProduct == null) return;
-
-        var drag = currentProduct.GetComponent<DragObject>();
-        if (drag == null) return;
-
-        drag.OnScanned -= OnProductScanned;
-        drag.OnScanned += OnProductScanned;
-    }
-
-    private void OnProductScanned(DragObject obj)
-    {
-        if (obj == null) return;
-
-        obj.OnScanned -= OnProductScanned;
-
-        if (scanner != null)
-            scanner.RegisterProductScan(obj);
-
-        RegisterProductScanned();
-    }
-
-    protected override void Initialize() { }
 }
