@@ -4,6 +4,11 @@ using TMPro;
 using UnityEngine.UI;
 using DG.Tweening;
 
+/// <summary>
+/// Actividad de Consulta de Frutas
+/// CAMBIOS: Solo se agregó tracking (correctAnswers/wrongAnswers) y adapter
+/// TODO lo demás está IGUAL al código original
+/// </summary>
 public class ConsultaFrutaActivity : ActivityBase
 {
     public AudioClip InstructionsMusic;
@@ -35,7 +40,7 @@ public class ConsultaFrutaActivity : ActivityBase
     public GameObject questionPanel;
     public GameObject successPanel;
     public TextMeshProUGUI questionText;
-    public List<Button> answerButtons;  
+    public List<Button> answerButtons;
     public Button continueButton;
 
     [Header("Comandos")]
@@ -47,12 +52,16 @@ public class ConsultaFrutaActivity : ActivityBase
     [Header("Efecto de Parpadeo")]
     public Image screenFlash;
     public Color correctColor = new Color(0, 1, 0, 0.5f);
-    public Color wrongColor = new Color(1, 0, 0, 0.5f); 
+    public Color wrongColor = new Color(1, 0, 0, 0.5f);
     public float flashDuration = 0.5f;
 
     [Header("Configuración del Cliente")]
     public CustomerSpawner customerSpawner;
     private GameObject currentCustomer;
+
+    // ✅ NUEVO: Tracking para el adapter
+    [HideInInspector] public int correctAnswers = 0;
+    [HideInInspector] public int wrongAnswers = 0;
 
     private GameObject currentFruit;
     private bool canSpawnFruit = true;
@@ -65,6 +74,7 @@ public class ConsultaFrutaActivity : ActivityBase
     {
         DisableAllPanels();
     }
+
     private void DisableAllPanels()
     {
         fruitHUD.SetActive(false);
@@ -76,6 +86,10 @@ public class ConsultaFrutaActivity : ActivityBase
     public override void StartActivity()
     {
         base.StartActivity();
+
+        correctAnswers = 0;
+        wrongAnswers = 0;
+
         RegisterCommands();
 
         currentCustomer = customerSpawner.SpawnCustomer();
@@ -90,11 +104,11 @@ public class ConsultaFrutaActivity : ActivityBase
                     canSpawnFruit = true;
                     ActivateConsultaFruta();
                 });
-            });           
+            });
         });
 
         activityTimerText = liveTimerText;
-        activityTimeText = successTimeText;        
+        activityTimeText = successTimeText;
     }
 
     private void RegisterCommands()
@@ -208,7 +222,6 @@ public class ConsultaFrutaActivity : ActivityBase
         }
     }
 
-
     public void RegisterFruitScanned(DragFruit scannedFruit)
     {
         if (scannedFruit == null) return;
@@ -321,6 +334,7 @@ public class ConsultaFrutaActivity : ActivityBase
 
     private void HandleCorrectFruitSelection()
     {
+        correctAnswers++;
         UpdateInstructionOnce(4);
         SoundManager.Instance.PlaySound("success");
         fruitSelectionPanel.SetActive(false);
@@ -356,7 +370,6 @@ public class ConsultaFrutaActivity : ActivityBase
                               $"{lastScannedFruit.weight:0.00} KG * ${lastScannedFruit.pricePerKilo:0.00} " +
                               $"                                ${resultado:0.00}\n";
 
-
         activityTotalPriceText.text = $"${totalSum:0.00}";
 
         scanCount++;
@@ -366,7 +379,7 @@ public class ConsultaFrutaActivity : ActivityBase
             UpdateInstructionOnce(5, RestartActivity, StartCompetition);
         }
         else if (scanCount == 3)
-        {           
+        {
             Invoke(nameof(RestartActivity), 0.9f);
         }
     }
@@ -426,35 +439,59 @@ public class ConsultaFrutaActivity : ActivityBase
                 button.onClick.AddListener(HandleWrongAnswer);
             }
         }
-
     }
 
     private void HandleCorrectAnswer()
     {
+        correctAnswers++;
+
         CustomerMovement movement = currentCustomer.GetComponent<CustomerMovement>();
         movement?.MoveToExit();
 
         SoundManager.Instance.PlaySound("success");
         FlashScreen(correctColor);
+
         cameraController.MoveToPosition("Actividad Pregunta Correcta", () =>
         {
-            successPanel.SetActive(true);
             StopActivityTimer();
             SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
             successPanel.transform.localScale = Vector3.one;
 
-            continueButton.onClick.RemoveAllListeners();
-            continueButton.onClick.AddListener(() =>
+            var adapter = GetComponent<ActivityMetricsAdapter>();
+            if (adapter != null)
             {
-                successPanel.SetActive(false);
+                if (wrongAnswers == 0)
+                {
+                    adapter.customMessage = "¡AHORA SABES CÓMO BUSCAR FRUTAS Y VERDURAS";
+                }
+                else if (wrongAnswers == 1)
+                {
+                    adapter.customMessage = "¡Bien hecho! Acertaste después de 1 intento.";
+                }
+                else if (wrongAnswers <= 3)
+                {
+                    adapter.customMessage = $"Acertaste después de {wrongAnswers} intentos.";
+                }
+                else
+                {
+                    adapter.customMessage = "Necesitas repasar un poco mas.";
+                }
+
+                Debug.Log($"[ConsultaFruta] Correctas: {correctAnswers}, Incorrectas: {wrongAnswers}");
+                adapter.NotifyActivityCompleted();
+            }
+            else
+            {
+                Debug.LogError("[ConsultaFruta] NO se encontró ActivityMetricsAdapter");
                 CompleteActivity();
-            });
+            }
         });
     }
 
     private void HandleWrongAnswer()
     {
+        wrongAnswers++;
+
         FlashScreen(wrongColor);
         SoundManager.Instance.PlaySound("error");
     }
@@ -482,7 +519,7 @@ public class ConsultaFrutaActivity : ActivityBase
             Debug.LogError("ERROR: La cuarta fruta en la lista no tiene datos válidos.");
             return;
         }
-    
+
         AnimateButtonsSequentiallyWithActivation(codeInputButtons, ShowProductInfoImmediately);
     }
 
@@ -490,7 +527,7 @@ public class ConsultaFrutaActivity : ActivityBase
     {
         HideInstructionsPanel();
         fruitHUD.SetActive(false);
-       
+
         if (lastScannedFruit == null)
         {
             Debug.LogError("ERROR: No se ha escaneado ninguna fruta. lastScannedFruit es null.");
@@ -542,6 +579,7 @@ public class ConsultaFrutaActivity : ActivityBase
 
     private void HandleWrongFruitSelection()
     {
+        wrongAnswers++;
         SoundManager.Instance.PlaySound("error");
     }
 

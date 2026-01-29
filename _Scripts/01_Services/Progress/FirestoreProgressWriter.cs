@@ -3,7 +3,7 @@ using System.Threading.Tasks;
 using Firebase.Firestore;
 using UnityEngine;
 
-public class FirestoreProgressWriter : MonoBehaviour
+public partial class FirestoreProgressWriter : MonoBehaviour
 {
     private FirebaseFirestore _db;
 

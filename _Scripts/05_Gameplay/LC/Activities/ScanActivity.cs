@@ -18,37 +18,37 @@ public class ScanActivity : ActivityBase
     public TextMeshProUGUI timerText;
     public TextMeshProUGUI productsScannedText;
 
-    [Header("Paneles de Resultado")]
-    public GameObject failurePanel;
-    public TextMeshProUGUI failureText;
-    public TextMeshProUGUI successText;
-    public TextMeshProUGUI remainingTimeText;
-    public Button continueButton;
-    public Button restartButton;
+    [Header("Sub Botal Button")]
     public List<Button> subtotalbuttons;
 
     [Header("Configuración del Cliente")]
     public CustomerSpawner customerSpawner;
-    private GameObject currentCustomer;
 
+    private GameObject currentCustomer;
     private GameObject currentProduct;
-    private int scannedCount = 0;
+
+
+    [HideInInspector] public int scannedCount = 0;
+    [HideInInspector] public float timeElapsed = 0f;
+
     private int minProductsToScan = 18;
     private float totalActivityTime = 60f;
     private bool isActivityActive = true;
     private bool minProductsReached = false;
     private int lastProductIndex = -1;
+    private float initialActivityTime = 60f;
 
     public override void StartActivity()
     {
         base.StartActivity();
+
         scanner.BindUI(this, activityProductsText, activityTotalPriceText, true);
         productNames = ObjectPoolManager.Instance.GetAvailablePrefabNames(PoolTag.Producto).ToArray();
 
         InitializeCommands();
 
         UpdateInstructionOnce(0, () =>
-        {        
+        {
             StartActivityScan();
         });
     }
@@ -97,8 +97,8 @@ public class ScanActivity : ActivityBase
                         SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, false);
                     }
                 });
-            });         
-        });      
+            });
+        });
     }
 
     public void HandleSubtotalPressed()
@@ -118,14 +118,14 @@ public class ScanActivity : ActivityBase
         GameObject prefab = ObjectPoolManager.Instance.GetRandomPrefabFromPool(PoolTag.Producto, ref lastProductIndex);
         if (prefab == null)
         {
-            Debug.LogWarning("❌ No se encontró prefab válido para productos");
+            Debug.LogWarning("No se encontró prefab válido para productos");
             return;
         }
 
         currentProduct = ObjectPoolManager.Instance.GetFromPool(PoolTag.Producto, prefab.name);
         if (currentProduct == null)
         {
-            Debug.LogWarning($"❌ No se encontró producto disponible para '{prefab.name}'");
+            Debug.LogWarning($"No se encontró producto disponible para '{prefab.name}'");
             return;
         }
 
@@ -148,7 +148,7 @@ public class ScanActivity : ActivityBase
     {
         if (!isActivityActive || obj == null) return;
 
-        obj.OnScanned -= HandleProductScanned; // anti pool-dup
+        obj.OnScanned -= HandleProductScanned;
 
         ObjectPoolManager.Instance.ReturnToPool(
             PoolTag.Producto,
@@ -173,7 +173,6 @@ public class ScanActivity : ActivityBase
             SpawnNextProductFromPool();
         }
     }
-
 
     public void RegisterProductScanned()
     {
@@ -220,97 +219,66 @@ public class ScanActivity : ActivityBase
         EndActivity();
     }
 
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ✅ FIXED: Lógica de finalización modificada
+    // ═════════════════════════════════════════════════════════════════════════════
+
     private void EndActivity()
     {
         StopAllCoroutines();
         isActivityActive = false;
 
+        timeElapsed = initialActivityTime - totalActivityTime;
+
         CustomerMovement movement = currentCustomer.GetComponent<CustomerMovement>();
         movement?.MoveToExit();
 
-        if (scannedCount < minProductsToScan)
+        NotifyAdapterCompleted();
+    }
+
+    private void NotifyAdapterCompleted()
+    {
+        SoundManager.Instance.RestorePreviousMusic();
+
+        if (productsScannedText != null)
+            productsScannedText.gameObject.SetActive(false);
+        if (timerText != null)
+            timerText.gameObject.SetActive(false);
+
+        var adapter = GetComponent<ActivityMetricsAdapter>();
+        if (adapter != null)
         {
-            ShowFailurePanel();
+            // Cambiar mensaje según productos escaneados
+            if (scannedCount >= minProductsToScan)
+            {
+                adapter.customMessage = "ESCANEASTE LOS 18 ARTÍCULOS EN MENOS DE UN MINUTO..";
+            }
+            else if (scannedCount >= 15)
+            {
+                adapter.customMessage = "¡Casi lo logras! Solo faltaron unos pocos productos.";
+            }
+            else if (scannedCount >= 10)
+            {
+                adapter.customMessage = "Buen intento, pero necesitas más práctica.";
+            }
+            else
+            {
+                adapter.customMessage = "Necesitas mejorar tu velocidad de escaneo.";
+            }
+
+            Debug.Log($"[ScanActivity] {scannedCount}/{minProductsToScan} - {adapter.customMessage}");
+            adapter.NotifyActivityCompleted();
         }
         else
         {
-            cameraController.MoveToPosition("Actividad Escaneo Subtotal", () =>
-            {
-                AnimateButtonsSequentiallyWithActivation(subtotalbuttons, ShowSuccessPanel);
-            });
-        }
-    }
-
-    private void ShowFailurePanel()
-    {
-        SoundManager.Instance.RestorePreviousMusic();
-        SoundManager.Instance.PlaySound("tryagain");
-
-        failureText.text = $"{scannedCount}/{minProductsToScan}";
-        failurePanel.SetActive(true);
-        failurePanel.transform.localScale = Vector3.zero;
-        failurePanel.transform.DOScale(Vector3.one, 0.5f).SetEase(Ease.OutBack);
-
-        restartButton.onClick.RemoveAllListeners();
-        restartButton.onClick.AddListener(() =>
-        {
-            failurePanel.transform.DOScale(Vector3.zero, 0.3f).OnComplete(() =>
-            {
-                failurePanel.SetActive(false);
-                RestartActivity();
-            });
-        });
-    }
-
-    private void ShowSuccessPanel()
-    {
-        SoundManager.Instance.RestorePreviousMusic();
-        productsScannedText.text = "0/18";
-        productsScannedText.gameObject.SetActive(false);
-        timerText.gameObject.SetActive(false);
-        successText.text = $"{scannedCount}";
-        remainingTimeText.text = $"{totalActivityTime:F1} s";
-      
-        cameraController.MoveToPosition("Actividad Escaneo Successful", () =>
-        {
-            SoundManager.Instance.PlaySound("win");
-
-            continueButton.onClick.RemoveAllListeners();
-            continueButton.onClick.AddListener(() =>
-            {
-                ContinueToNextActivity();
-            });
-        });
-    }
-
-    private void ContinueToNextActivity()
-    {
-        cameraController.MoveToPosition("Iniciando Juego", () =>
-        {
-            CompleteActivity();
-        });
-    }
-
-    private void RestartActivity()
-    {
-        scannedCount = 0;
-        totalActivityTime = 60f;
-        isActivityActive = true;
-        minProductsReached = false;
-        timerText.text = $"{totalActivityTime:F1} s";
-        productsScannedText.text = "0/18";
-
-        if (currentProduct != null)
-        {
-            ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, currentProduct.name, currentProduct);
-            currentProduct = null;
+            base.CompleteActivity();
         }
 
-        StartActivity();
     }
+
     protected override void Initialize()
     {
-        
+
     }
 
     protected override void OnDisable()

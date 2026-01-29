@@ -23,10 +23,6 @@ public class CashRegisterActivationActivity : ActivityBase
     public Material newMaterial; 
     public int materialIndex = 3;
 
-    [Header("Panel Success")]
-    public Button continueButton;
-
-
     [Header("Brillo (URP)")]
     [Range(0, 1f)] public float shinySmoothness = 0.9f; 
     [Range(0, 1f)] public float shinyMetallic = 0.0f;  
@@ -171,21 +167,23 @@ public class CashRegisterActivationActivity : ActivityBase
         SoundManager.Instance.PlaySound("success");
         ActivityComplete();
     }
-    
+
     public void ActivityComplete()
     {
         commandManager.commandList.Clear();
-        cameraController.MoveToPosition("Actividad Cash Successfull", () =>
-        {
-            continueButton.onClick.RemoveAllListeners();
-            SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
+        SoundManager.Instance.RestorePreviousMusic();
 
-            continueButton.onClick.AddListener(() =>
-            {
-                cameraController.MoveToPosition("Iniciando Juego");
-                CompleteActivity();
-            });
-        });
+        var adapter = GetComponent<ActivityMetricsAdapter>();
+
+        if (adapter != null)
+        {
+            var panel = UnifiedSummaryPanel.Instance;
+            adapter.NotifyActivityCompleted();
+        }
+        else
+        {
+            Debug.LogError("❌ NO HAY ADAPTER!");
+            base.CompleteActivity();
+        }
     }
 }
