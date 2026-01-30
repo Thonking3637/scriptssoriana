@@ -2,6 +2,8 @@
 // ActivityMetricsAdapter.cs
 // Componente NO INVASIVO que se adjunta a cualquier ActivityBase
 // Lee métricas por reflection y las normaliza para el Orquestador
+// 
+// ACTUALIZACIÓN: Ahora soporta ActivitySummaryConfig para mensajes dinámicos
 // ═══════════════════════════════════════════════════════════════════════════════
 
 using UnityEngine;
@@ -16,6 +18,12 @@ public class ActivityMetricsAdapter : MonoBehaviour
     [Header("Configuración")]
     [SerializeField] private ActivityBase targetActivity;
     [SerializeField] private string activityId = "FYV_A1";
+
+    [Header("Mensajes")]
+    [Tooltip("Config global de mensajes (opcional). Si está asignado, ignora customMessage.")]
+    [SerializeField] private ActivitySummaryConfig summaryConfig;
+
+    [Tooltip("Mensaje fijo (solo se usa si summaryConfig es null)")]
     [SerializeField] public string customMessage = "¡Excelente trabajo!";
 
     [Header("Extracción de Métricas")]
@@ -70,25 +78,6 @@ public class ActivityMetricsAdapter : MonoBehaviour
     /// 
     /// IMPORTANTE: Llamar este método ANTES de llamar CompleteActivity() para prevenir
     /// el race condition con el GameManager.
-    /// 
-    /// Ejemplo en la actividad:
-    /// <code>
-    /// public void ActivityComplete()
-    /// {
-    ///     // Cleanup...
-    ///     
-    ///     var adapter = GetComponent<ActivityMetricsAdapter>();
-    ///     if (adapter != null)
-    ///     {
-    ///         adapter.NotifyActivityCompleted();
-    ///         // El panel se mostrará y el botón "Continuar" llamará CompleteActivity()
-    ///     }
-    ///     else
-    ///     {
-    ///         CompleteActivity(); // Fallback si no hay adapter
-    ///     }
-    /// }
-    /// </code>
     /// </summary>
     public void NotifyActivityCompleted()
     {
@@ -224,77 +213,52 @@ public class ActivityMetricsAdapter : MonoBehaviour
             return field.GetValue(instance);
 
         // Intentar propiedad
-        var property = type.GetProperty(fieldName, flags);
-        if (property != null && property.CanRead)
-            return property.GetValue(instance);
+        var prop = type.GetProperty(fieldName, flags);
+        if (prop != null)
+            return prop.GetValue(instance);
 
-        Debug.LogWarning($"[Adapter] Campo/Propiedad '{fieldName}' no encontrado en {type.Name}");
+        Debug.LogWarning($"[Adapter] Campo/propiedad '{fieldName}' no encontrado en {type.Name}");
         return null;
     }
 
-    /// <summary>
-    /// Convierte object a int (soporta int, bool, bool[], List<bool>)
-    /// </summary>
     private int ConvertToInt(object value)
     {
         if (value == null) return 0;
 
-        // Int directo
-        if (value is int i) return i;
-
-        // Bool
-        if (value is bool b) return b ? 1 : 0;
-
-        // Array de bool (contar true)
-        if (value is bool[] bArr)
+        try
         {
-            int count = 0;
-            foreach (var x in bArr) if (x) count++;
-            return count;
+            return System.Convert.ToInt32(value);
         }
-
-        // List de bool
-        if (value is System.Collections.Generic.List<bool> bList)
+        catch
         {
-            int count = 0;
-            foreach (var x in bList) if (x) count++;
-            return count;
+            return 0;
         }
-
-        // Lista genérica (contar elementos)
-        if (value is System.Collections.IList list)
-            return list.Count;
-
-        // Fallback: intentar parsear
-        if (int.TryParse(value.ToString(), out int result))
-            return result;
-
-        return 0;
     }
 
-    /// <summary>
-    /// Parsea texto de tiempo "1:23" o "45s" a segundos
-    /// </summary>
-    private float ParseTimeFromText(string text)
+    private float ParseTimeFromText(string timeText)
     {
-        if (string.IsNullOrEmpty(text)) return 0f;
+        if (string.IsNullOrEmpty(timeText)) return 0f;
 
-        // Formato "MM:SS"
-        if (text.Contains(":"))
+        // Formato esperado: "1:30" o "90" o "1m 30s"
+        timeText = timeText.Trim();
+
+        // Intentar formato "M:SS"
+        if (timeText.Contains(":"))
         {
-            var parts = text.Split(':');
-            if (parts.Length >= 2)
+            var parts = timeText.Split(':');
+            if (parts.Length == 2 &&
+                int.TryParse(parts[0], out int min) &&
+                int.TryParse(parts[1], out int sec))
             {
-                int.TryParse(parts[0], out int mins);
-                int.TryParse(parts[1].Split(' ')[0], out int secs);
-                return mins * 60f + secs;
+                return min * 60f + sec;
             }
         }
 
-        // Formato "45s" o "45"
-        text = text.Replace("s", "").Replace("S", "").Trim();
-        if (float.TryParse(text, out float seconds))
+        // Intentar formato numérico simple (segundos)
+        if (float.TryParse(timeText.Replace("s", "").Trim(), out float seconds))
+        {
             return seconds;
+        }
 
         return 0f;
     }
@@ -369,10 +333,13 @@ public class ActivityMetricsAdapter : MonoBehaviour
 
     private void SaveResult()
     {
+        // Obtener mensaje dinámico
+        string message = GetDynamicMessage();
+
         // Guardar en el servicio de scoring
         if (ActivityScoringService.Instance != null)
         {
-            ActivityScoringService.Instance.SaveScore(activityId, _metrics, customMessage);
+            ActivityScoringService.Instance.SaveScore(activityId, _metrics, message);
         }
 
         // Marcar como completada en el sistema existente
@@ -388,6 +355,21 @@ public class ActivityMetricsAdapter : MonoBehaviour
                 ProgressService.Instance.CommitMedal(scene, activityIndex);
             }
         }
+    }
+
+    /// <summary>
+    /// Obtiene el mensaje dinámico basado en el config o el mensaje fijo.
+    /// </summary>
+    private string GetDynamicMessage()
+    {
+        // Si hay config de mensajes, usarlo
+        if (summaryConfig != null)
+        {
+            return summaryConfig.GetMessage(activityId, _metrics.stars, _metrics.errors);
+        }
+
+        // Fallback al mensaje fijo
+        return customMessage;
     }
 
     private int GetActivityIndex()
@@ -425,12 +407,16 @@ public class ActivityMetricsAdapter : MonoBehaviour
             return;
         }
 
+        // ✅ Obtener mensaje dinámico
+        string message = GetDynamicMessage();
+
         Debug.Log("[Adapter] ✅ Panel encontrado, preparando datos...");
         Debug.Log($"[Adapter] Score: {_metrics.score}/100, Stars: {_metrics.stars}");
+        Debug.Log($"[Adapter] Mensaje: {message}");
 
         // ✅ Pasar la referencia de la actividad al panel
         Debug.Log("[Adapter] Llamando panel.Show()...");
-        panel.Show(_metrics, activityId, customMessage, targetActivity);
+        panel.Show(_metrics, activityId, message, targetActivity);
         Debug.Log("[Adapter] panel.Show() ejecutado");
 
         Debug.Log("[Adapter] ════════════════════════════════════");
@@ -455,6 +441,15 @@ public class ActivityMetricsAdapter : MonoBehaviour
         ExtractMetrics();
         CalculateScore();
         Debug.Log($"[Test] Score: {_metrics.score}/100, Stars: {_metrics.stars}");
+    }
+
+    [ContextMenu("Test: Get Dynamic Message")]
+    private void TestGetDynamicMessage()
+    {
+        ExtractMetrics();
+        CalculateScore();
+        string msg = GetDynamicMessage();
+        Debug.Log($"[Test] Mensaje dinámico: {msg}");
     }
 }
 

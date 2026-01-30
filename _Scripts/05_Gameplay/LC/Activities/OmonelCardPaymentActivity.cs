@@ -7,9 +7,12 @@ using DG.Tweening;
 /// <summary>
 /// Actividad de Pago con Tarjeta Omonel - MIGRADA a LCPaymentActivityBase
 /// 
-/// ANTES: ~400 líneas
-/// DESPUÉS: ~220 líneas
-/// REDUCCIÓN: ~45%
+/// CONFIGURACIÓN ActivityMetricsAdapter:
+/// - successesFieldName: "currentAttempt"
+/// - errorsFieldName: (vacío)
+/// - expectedTotal: 3
+/// - evaluationType: TimeBased
+/// - idealTimeSeconds: 90
 /// 
 /// Flujo de instrucciones:
 /// 0 = Inicio (bienvenida)
@@ -57,7 +60,7 @@ public class OmonelCardPaymentActivity : LCPaymentActivityBase
 
     protected override void OnSubtotalPhaseReady()
     {
-        UpdateInstructionOnce(1); // "Presiona SUBTOTAL"
+        UpdateInstructionOnce(1);
         ActivateCommandButtons(subtotalButtons);
     }
 
@@ -125,49 +128,34 @@ public class OmonelCardPaymentActivity : LCPaymentActivityBase
     // LÓGICA ESPECÍFICA DE OMONEL - FLUJO DE TARJETA
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Después de presionar Subtotal, mostrar la tarjeta.
-    /// </summary>
     protected override void OnSubtotalPressed(float totalAmount)
     {
         ShowCard();
     }
 
-    /// <summary>
-    /// Muestra la tarjeta Omonel y activa la interacción.
-    /// </summary>
     private void ShowCard()
     {
         SoundManager.Instance.PlaySound("success");
         cameraController.MoveToPosition("Actividad Omonel Primera Posicion", () =>
         {
-            UpdateInstructionOnce(2); // "Desliza la tarjeta"
+            UpdateInstructionOnce(2);
             cardInteraction.gameObject.SetActive(true);
         });
     }
 
-    /// <summary>
-    /// Callback cuando la tarjeta llega a la primera posición.
-    /// </summary>
     private void HandleCardArrived()
     {
-        UpdateInstructionOnce(3); // "Continúa deslizando"
+        UpdateInstructionOnce(3);
         cameraController.MoveToPosition("Actividad Omonel Segunda Posicion");
     }
 
-    /// <summary>
-    /// Callback cuando la tarjeta llega a la segunda posición.
-    /// </summary>
     private void HandleCardMovedToSecondPosition()
     {
         SoundManager.Instance.PlaySound("success");
-        UpdateInstructionOnce(4); // "Retira la tarjeta"
+        UpdateInstructionOnce(4);
         cameraController.MoveToPosition("Actividad Omonel Final Posicion");
     }
 
-    /// <summary>
-    /// Callback cuando la tarjeta es devuelta al cliente.
-    /// </summary>
     private void HandleCardReturned()
     {
         if (currentCustomer == null)
@@ -190,22 +178,16 @@ public class OmonelCardPaymentActivity : LCPaymentActivityBase
     // LÓGICA DE INPUT DE MONTO
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Activa el input para escribir el monto.
-    /// </summary>
     private void ActivatePinInput()
     {
         cameraController.MoveToPosition("Actividad Omonel Escribir Monto", () =>
         {
-            UpdateInstructionOnce(5); // "Escribe el monto"
+            UpdateInstructionOnce(5);
             float totalAmount = GetTotalAmount(activityTotalPriceText);
             ActivateOmonelAmountInput(totalAmount);
         });
     }
 
-    /// <summary>
-    /// Activa el input de monto específico para Omonel.
-    /// </summary>
     private void ActivateOmonelAmountInput(float amount)
     {
         // Activar input field
@@ -233,18 +215,12 @@ public class OmonelCardPaymentActivity : LCPaymentActivityBase
         });
     }
 
-    /// <summary>
-    /// Maneja el comando Enter Last - valida el monto.
-    /// </summary>
     public void HandleEnterLast()
     {
         SoundManager.Instance.PlaySound("success");
         ValidateAmount();
     }
 
-    /// <summary>
-    /// Valida el monto y decide si continuar o completar.
-    /// </summary>
     private void ValidateAmount()
     {
         currentAttempt++;
@@ -263,14 +239,14 @@ public class OmonelCardPaymentActivity : LCPaymentActivityBase
             // Más intentos disponibles
             cameraController.MoveToPosition(GetStartCameraPosition(), () =>
             {
-                UpdateInstructionOnce(6); // "Preparando siguiente cliente"
+                UpdateInstructionOnce(6);
                 Invoke(nameof(RestartActivity), 1f);
             });
         }
         else
         {
-            // Completar actividad
-            ShowActivityCompletePanel();
+            // Completar actividad con UnifiedSummaryPanel
+            OnAllAttemptsComplete();
         }
     }
 
@@ -278,9 +254,6 @@ public class OmonelCardPaymentActivity : LCPaymentActivityBase
     // RESTART Y FINALIZACIÓN
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Reinicia la actividad para el siguiente intento.
-    /// </summary>
     private void RestartActivity()
     {
         ResetValues();
@@ -293,31 +266,15 @@ public class OmonelCardPaymentActivity : LCPaymentActivityBase
 
         DOVirtual.DelayedCall(0.3f, () =>
         {
-            UpdateInstructionOnce(7, StartNewAttempt, StartCompetition);
-        });
-    }
-
-    /// <summary>
-    /// Muestra el panel de éxito.
-    /// </summary>
-    private void ShowActivityCompletePanel()
-    {
-        StopActivityTimer();
-        ResetValues();
-        commandManager.commandList.Clear();
-
-        cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
-        {
-            continueButton.onClick.RemoveAllListeners();
-            SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
-
-            continueButton.onClick.AddListener(() =>
+            // StartCompetition solo después del primer intento
+            if (currentAttempt == 1)
             {
-                cameraController.MoveToPosition(GetStartCameraPosition());
-                cardInteraction.ResetCard();
-                CompleteActivity();
-            });
+                UpdateInstructionOnce(7, StartNewAttempt, StartCompetition);
+            }
+            else
+            {
+                UpdateInstructionOnce(7, StartNewAttempt);
+            }
         });
     }
 
@@ -329,7 +286,6 @@ public class OmonelCardPaymentActivity : LCPaymentActivityBase
     {
         base.ResetValues();
 
-        // Reset específico de Omonel
         if (amountInputField != null)
             amountInputField.text = "";
     }
@@ -338,7 +294,6 @@ public class OmonelCardPaymentActivity : LCPaymentActivityBase
     {
         base.OnDisable();
 
-        // Desuscribirse de eventos de CardInteraction
         if (cardInteraction != null)
         {
             cardInteraction.OnCardMovedToFirstPosition -= HandleCardArrived;

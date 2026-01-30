@@ -6,20 +6,37 @@ using System.Collections.Generic;
 /// <summary>
 /// Actividad de Pago en Efectivo - MIGRADA a LCPaymentActivityBase
 /// 
-/// ANTES: ~400 líneas
-/// DESPUÉS: ~150 líneas
-/// REDUCCIÓN: 62%
+/// INTEGRACIÓN CON UnifiedSummaryPanel:
+/// Para habilitar el sistema de 3 estrellas:
+/// 1. Agregar componente ActivityMetricsAdapter al GameObject
+/// 2. Configurar en el Inspector:
+///    - successesFieldName = "successCount" (cobros exitosos)
+///    - errorsFieldName = "errorCount" (errores de cambio)
+///    - expectedTotal = 3 (número de intentos)
+/// 3. El adapter se encarga automáticamente de mostrar el panel al completar
 /// 
-/// Cambios principales:
-/// - Ya no necesita: StartNewAttempt, RegisterProductScanned, BindCurrentProduct,
-///   HandleTicketDelivered, ActivityComplete, ResetValues (versión base)
-/// - Solo implementa lógica específica de efectivo
+/// FLUJO:
+/// 1. Cliente llega → Escanear productos → SUBTOTAL
+/// 2. Cliente paga en efectivo → Escribir monto → EFECTIVO
+/// 3. Dar cambio correcto → Entregar ticket → Cliente sale
+/// 4. Repetir 3 veces → Mostrar panel de éxito (o UnifiedSummaryPanel si hay adapter)
+/// 
+/// ERRORES POSIBLES:
+/// - Dar cambio incorrecto (único error trackeable en esta actividad)
 /// </summary>
 public class CashPaymentActivity : LCPaymentActivityBase
 {
     // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS PARA ActivityMetricsAdapter
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Cantidad de cobros exitosos (para métricas)</summary>
+    [HideInInspector] public int successCount = 0;
+
+    /// <summary>Cantidad de errores de cambio (para métricas)</summary>
+    [HideInInspector] public int errorCount = 0;
+    // ══════════════════════════════════════════════════════════════════════════════
     // CONFIGURACIÓN ESPECÍFICA DE EFECTIVO
-    // (Solo lo que NO está en la clase base)
     // ══════════════════════════════════════════════════════════════════════════════
 
     [Header("Cash Payment - Money")]
@@ -37,7 +54,6 @@ public class CashPaymentActivity : LCPaymentActivityBase
 
     // ══════════════════════════════════════════════════════════════════════════════
     // IMPLEMENTACIÓN DE MÉTODOS ABSTRACTOS
-    // (Configuración que la base necesita conocer)
     // ══════════════════════════════════════════════════════════════════════════════
 
     protected override string GetStartCameraPosition() => "Iniciando Juego";
@@ -46,7 +62,7 @@ public class CashPaymentActivity : LCPaymentActivityBase
     protected override string GetActivityCommandId() => "Day2_PagoEfectivo";
 
     // ══════════════════════════════════════════════════════════════════════════════
-    // MANEJO DE INSTRUCCIONES (cada actividad tiene índices diferentes)
+    // MANEJO DE INSTRUCCIONES
     // ══════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
@@ -75,6 +91,9 @@ public class CashPaymentActivity : LCPaymentActivityBase
 
     protected override void OnActivityInitialize()
     {
+        // Resetear métricas al inicio de la actividad
+        ResetMetrics();
+
         // Suscribirse al evento de dinero recolectado del cliente
         if (customerPayment != null)
         {
@@ -180,17 +199,19 @@ public class CashPaymentActivity : LCPaymentActivityBase
             MoneyManager.OpenMoneyPanel(moneyPanel, moneyPanelStartPos, moneyPanelEndPos);
 
             // El flujo continúa cuando el usuario valida el cambio correcto
-            // MoneySpawner.ValidateChange() -> OnCorrectChangeGiven()
+            // MoneySpawner.ValidateChange() -> OnCorrectChangeGiven() o OnIncorrectChangeGiven()
         });
     }
 
     /// <summary>
     /// Llamado por MoneySpawner.ValidateChange() cuando el cambio es correcto.
     /// ⚠️ IMPORTANTE: MoneySpawner usa FindObjectOfType para llamar este método.
-    /// TODO: Refactorizar MoneySpawner para usar eventos en lugar de FindObjectOfType.
     /// </summary>
     public void OnCorrectChangeGiven()
     {
+        // ✅ Registrar éxito para métricas
+        successCount++;
+
         // Cerrar panel de dinero
         MoneyManager.CloseMoneyPanel(moneyPanel, moneyPanelHidePos);
         SoundManager.Instance.PlaySound("success");
@@ -205,12 +226,38 @@ public class CashPaymentActivity : LCPaymentActivityBase
         });
     }
 
+    /// <summary>
+    /// Llamado cuando el usuario da un cambio incorrecto.
+    /// Este método debe ser llamado por MoneySpawner cuando ValidateChange() falla.
+    /// 
+    /// NOTA: Para habilitar esto, MoneySpawner.ValidateChange() debe ser modificado para:
+    /// 1. Buscar CashPaymentActivity
+    /// 2. Llamar OnIncorrectChangeGiven() cuando el cambio es incorrecto
+    /// 
+    /// Ejemplo de modificación en MoneySpawner.ValidateChange():
+    /// <code>
+    /// if (!Mathf.Approximately(givenAmount, changeDue))
+    /// {
+    ///     SoundManager.Instance.PlaySound("error");
+    ///     var activity = FindObjectOfType<CashPaymentActivity>();
+    ///     if (activity != null) activity.OnIncorrectChangeGiven();
+    ///     return;
+    /// }
+    /// </code>
+    /// </summary>
+    public void OnIncorrectChangeGiven()
+    {
+        // ✅ Registrar error para métricas
+        errorCount++;
+        Debug.Log($"[CashPayment] Error de cambio registrado. Total errores: {errorCount}");
+    }
+
     // ══════════════════════════════════════════════════════════════════════════════
     // SOBRESCRITURAS DE FLUJO
     // ══════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Sobrescribe HandleTicketDelivered de la base para usar la lógica de CashPayment.
+    /// Sobrescribe HandleTicketDelivered para lógica específica de CashPayment.
     /// </summary>
     protected override void HandleTicketDelivered()
     {
@@ -227,7 +274,8 @@ public class CashPaymentActivity : LCPaymentActivityBase
         }
         else
         {
-            ActivityComplete();
+            // Usar el método de la base que detecta ActivityMetricsAdapter automáticamente
+            OnAllAttemptsComplete();
         }
     }
 
@@ -235,27 +283,19 @@ public class CashPaymentActivity : LCPaymentActivityBase
     {
         ResetValues();
         RegenerateProductValues();
-        UpdateInstructionOnce(6, StartNewAttempt, StartCompetition);
-    }
 
-    private void ActivityComplete()
-    {
-        StopActivityTimer();
-        ResetValues();
-        commandManager.commandList.Clear();
-
-        cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
+        // StartCompetition solo se llama después del primer intento (tutorial → práctica)
+        // En intentos siguientes, la música ya está sonando
+        if (currentAttempt == 1)
         {
-            continueButton.onClick.RemoveAllListeners();
-            SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
-
-            continueButton.onClick.AddListener(() =>
-            {
-                cameraController.MoveToPosition(GetStartCameraPosition());
-                CompleteActivity();
-            });
-        });
+            // Primer restart: iniciar modo práctica con música y timer
+            UpdateInstructionOnce(6, StartNewAttempt, StartCompetition);
+        }
+        else
+        {
+            // Restarts siguientes: solo continuar, música ya suena
+            UpdateInstructionOnce(6, StartNewAttempt);
+        }
     }
 
     protected override void ResetValues()
@@ -269,6 +309,18 @@ public class CashPaymentActivity : LCPaymentActivityBase
 
         if (customerPayment != null)
             customerPayment.ResetCustomerPayment();
+
+        // NO resetear successCount ni errorCount aquí - se acumulan durante toda la actividad
+    }
+
+    /// <summary>
+    /// Resetea las métricas al inicio de la actividad.
+    /// Llamar en StartActivity o OnActivityInitialize.
+    /// </summary>
+    private void ResetMetrics()
+    {
+        successCount = 0;
+        errorCount = 0;
     }
 
     protected override void OnRestartAttempt()
@@ -276,8 +328,28 @@ public class CashPaymentActivity : LCPaymentActivityBase
         ResetValues();
         RegenerateProductValues();
 
-        // En efectivo, mostramos instrucción antes de reiniciar
-        UpdateInstructionOnce(6, StartNewAttempt, StartCompetition);
+        // Solo mostrar instrucción - NO reiniciar música
+        UpdateInstructionOnce(6, StartNewAttempt);
+    }
+
+    /// <summary>
+    /// Inicia la fase de competencia con música y timer.
+    /// IMPORTANTE: Usar restartIfSame = true para reiniciar la música entre intentos.
+    /// </summary>
+    protected override void StartCompetition()
+    {
+        if (activityMusicClip != null)
+        {
+            // ✅ FIX: Usar restartIfSame = true para reiniciar música entre intentos
+            SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, true);
+        }
+
+        if (liveTimerText != null)
+        {
+            liveTimerText.gameObject.SetActive(true);
+        }
+
+        StartActivityTimer();
     }
 
     // ══════════════════════════════════════════════════════════════════════════════

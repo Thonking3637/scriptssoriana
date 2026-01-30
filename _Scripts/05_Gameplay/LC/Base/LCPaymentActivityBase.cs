@@ -18,14 +18,13 @@ using DG.Tweening;
 /// ✅ RedeemPointsActivity     - Canje de puntos
 /// ✅ AngryClientVelocity      - Cliente molesto (velocidad)
 /// 
-/// SCRIPTS QUE REQUIEREN EVALUACIÓN (flujos más especializados):
-/// ─────────────────────────────────────────────────────────────
-/// ⚠️ AngryClientCalmDown     - Tiene sistema de emociones único
-/// ⚠️ AngryClientPrice        - Tiene cambio de precio y supervisor
-/// ⚠️ SuspensionReactivacion  - Flujo de suspensión/reactivación muy diferente
-/// ⚠️ PriceCheckActivity      - No tiene flujo de pago, solo consulta
-/// ⚠️ ScanActivity            - Solo escaneo masivo, sin pago
-/// ⚠️ AlertCashWithdrawal     - Flujo de retiro de efectivo diferente
+/// ═══════════════════════════════════════════════════════════════════════════════
+/// INTEGRACIÓN CON UnifiedSummaryPanel (Sistema de 3 Estrellas)
+/// ═══════════════════════════════════════════════════════════════════════════════
+/// Para usar el sistema de 3 estrellas:
+/// 1. Agregar ActivityMetricsAdapter como componente al GameObject
+/// 2. En el ActivityComplete(), llamar adapter.NotifyActivityCompleted()
+/// 3. El adapter extrae métricas, calcula score y muestra el panel
 /// </summary>
 public abstract class LCPaymentActivityBase : ActivityBase
 {
@@ -135,10 +134,13 @@ public abstract class LCPaymentActivityBase : ActivityBase
         // Configurar scanner
         SetupScanner();
 
+        // Configurar timer (busca automáticamente si no está asignado)
+        SetupTimer();
+
         // Obtener nombres de productos del pool
         productNames = ObjectPoolManager.Instance.GetAvailablePrefabNames(PoolTag.Producto).ToArray();
 
-        // Configurar timer
+        // Configurar timer text para ActivityBase
         activityTimerText = liveTimerText;
         activityTimeText = successTimeText;
 
@@ -170,6 +172,12 @@ public abstract class LCPaymentActivityBase : ActivityBase
     /// <summary>Hook para inicialización adicional en clases hijas</summary>
     protected virtual void OnActivityInitialize() { }
 
+    /// <summary>
+    /// Inicializa los comandos de la actividad.
+    /// Las hijas sobrescriben para agregar sus comandos específicos.
+    /// </summary>
+    protected override void InitializeCommands() { }
+
     protected virtual void SetupScanner()
     {
         if (scanner != null)
@@ -178,6 +186,56 @@ public abstract class LCPaymentActivityBase : ActivityBase
             scanner.ClearUI();
             scanner.BindUI(this, activityProductsText, activityTotalPriceText, true);
         }
+    }
+
+    /// <summary>
+    /// Configura el timer de la actividad.
+    /// Si liveTimerText no está asignado, intenta buscarlo por nombre.
+    /// </summary>
+    protected virtual void SetupTimer()
+    {
+        // Si ya está asignado, solo vincular
+        if (liveTimerText != null)
+        {
+            activityTimerText = liveTimerText;
+            liveTimerText.gameObject.SetActive(false); // Oculto hasta StartCompetition
+            return;
+        }
+
+        // Intentar buscar por nombre común
+        string[] possibleNames = { "LiveTimerText", "TimerText", "ActivityTimer", "Timer" };
+
+        foreach (string timerName in possibleNames)
+        {
+            var found = GameObject.Find(timerName);
+            if (found != null)
+            {
+                liveTimerText = found.GetComponent<TextMeshProUGUI>();
+                if (liveTimerText != null)
+                {
+                    activityTimerText = liveTimerText;
+                    liveTimerText.gameObject.SetActive(false);
+                    Debug.Log($"[{GetType().Name}] Timer encontrado automáticamente: {timerName}");
+                    return;
+                }
+            }
+        }
+
+        // Si no se encontró, buscar por tag
+        var timerByTag = GameObject.FindWithTag("ActivityTimer");
+        if (timerByTag != null)
+        {
+            liveTimerText = timerByTag.GetComponent<TextMeshProUGUI>();
+            if (liveTimerText != null)
+            {
+                activityTimerText = liveTimerText;
+                liveTimerText.gameObject.SetActive(false);
+                Debug.Log($"[{GetType().Name}] Timer encontrado por tag: ActivityTimer");
+                return;
+            }
+        }
+
+        Debug.LogWarning($"[{GetType().Name}] No se encontró liveTimerText. El timer no se mostrará.");
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
@@ -221,57 +279,72 @@ public abstract class LCPaymentActivityBase : ActivityBase
         if (currentProduct != null)
         {
             OnAfterProductSpawn(currentProduct);
-            BindCurrentProduct();
+            BindCurrentProduct(currentProduct);
         }
     }
 
     /// <summary>
-    /// Bindea el producto actual al evento OnScanned.
-    /// Antes estaba duplicado EXACTAMENTE IGUAL en ~8 actividades.
+    /// Bindea el producto actual (currentProduct) para escaneo.
+    /// Versión sin parámetro para compatibilidad con actividades existentes.
     /// </summary>
-    protected void BindCurrentProduct()
+    protected virtual void BindCurrentProduct()
     {
-        if (currentProduct == null) return;
-
-        var drag = currentProduct.GetComponent<DragObject>();
-        if (drag == null) return;
-
-        // Anti-duplicados por reuse de pool
-        drag.OnScanned -= OnProductScanned;
-        drag.OnScanned += OnProductScanned;
+        if (currentProduct != null)
+        {
+            BindCurrentProduct(currentProduct);
+        }
     }
 
     /// <summary>
-    /// Callback cuando un producto es escaneado.
-    /// Antes estaba duplicado en ~8 actividades.
+    /// Bindea un producto específico para escaneo.
+    /// Registra eventos de escaneo.
     /// </summary>
-    protected virtual void OnProductScanned(DragObject obj)
+    protected virtual void BindCurrentProduct(GameObject product)
     {
-        if (obj == null) return;
+        if (product == null) return;
 
-        obj.OnScanned -= OnProductScanned;
+        var drag = product.GetComponent<DragObject>();
+        if (drag != null)
+        {
+            // Usar OnScanned (el evento correcto en DragObject)
+            drag.OnScanned -= OnProductScannedHandler;
+            drag.OnScanned += OnProductScannedHandler;
+        }
+    }
 
+    /// <summary>
+    /// Handler interno para el evento OnScanned de DragObject.
+    /// </summary>
+    private void OnProductScannedHandler(DragObject dragObj)
+    {
+        if (dragObj == null) return;
+
+        // Desuscribirse para evitar duplicados
+        dragObj.OnScanned -= OnProductScannedHandler;
+
+        // Registrar en el scanner si existe
         if (scanner != null)
         {
-            scanner.RegisterProductScan(obj);
-            RegisterProductScanned();
+            scanner.RegisterProductScan(dragObj);
         }
-        else
-        {
-            Debug.LogError($"{GetType().Name}: scanner es NULL.");
-        }
+
+        // Llamar al método virtual que las hijas pueden sobrescribir
+        RegisterProductScanned();
     }
 
     /// <summary>
-    /// Registra el producto escaneado y decide si spawnear otro o avanzar a subtotal.
-    /// Antes estaba duplicado en ~8 actividades (¡y con bugs como el scannedCount++ faltante!).
+    /// Método virtual llamado cuando un producto es escaneado.
+    /// Las hijas pueden sobrescribir para lógica personalizada.
+    /// Por defecto: incrementa contador, devuelve al pool, spawna siguiente o finaliza.
     /// </summary>
     protected virtual void RegisterProductScanned()
     {
-        scannedCount++; // ✅ IMPORTANTE: Esto faltaba en CashPaymentActivity
+        scannedCount++;
 
+        // Devolver producto al pool
         ReturnCurrentProductToPool();
 
+        // Verificar si hay más productos
         if (scannedCount < productsToScan)
         {
             SpawnAndBindProduct();
@@ -283,40 +356,52 @@ public abstract class LCPaymentActivityBase : ActivityBase
     }
 
     /// <summary>
-    /// Devuelve el producto actual al pool de objetos.
-    /// Antes estaba duplicado con variaciones menores en ~8 actividades.
+    /// Devuelve el producto actual al pool.
+    /// Método extraído para que las hijas puedan llamarlo directamente.
     /// </summary>
-    protected void ReturnCurrentProductToPool()
+    protected virtual void ReturnCurrentProductToPool()
     {
         if (currentProduct == null) return;
 
         var drag = currentProduct.GetComponent<DragObject>();
-        string poolName = drag?.GetOriginalPoolNameSafe() ?? currentProduct.name;
+        string poolName = (drag != null && !string.IsNullOrEmpty(drag.OriginalPoolName))
+            ? drag.OriginalPoolName
+            : currentProduct.name;
 
         ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, poolName, currentProduct);
         currentProduct = null;
     }
 
-    // ══════════════════════════════════════════════════════════════════════════════
-    // FASE SUBTOTAL
-    // ══════════════════════════════════════════════════════════════════════════════
+    /// <summary>
+    /// Callback cuando un producto es escaneado (versión con DragObject).
+    /// Las hijas pueden sobrescribir para lógica adicional con acceso al DragObject.
+    /// </summary>
+    protected virtual void OnProductScanned(DragObject dragObj)
+    {
+        // Por defecto no hace nada extra, RegisterProductScanned() maneja todo
+        // Las hijas pueden sobrescribir si necesitan acceso al DragObject
+    }
 
     /// <summary>
-    /// Mueve a la fase de subtotal con animación de cámara y botones.
-    /// ⚠️ NO llama UpdateInstructionOnce - eso lo hace OnSubtotalPhaseReady()
+    /// Mueve a la fase de subtotal.
     /// </summary>
     protected virtual void MoveToSubtotalPhase()
     {
         cameraController.MoveToPosition(GetSubtotalCameraPosition(), () =>
         {
-            // Hook para que la hija muestre la instrucción correcta
-            OnSubtotalPhaseReady();
+            // Activar botones de subtotal
+            foreach (var button in subtotalButtons)
+            {
+                button.interactable = true;
+            }
+
             AnimateButtonsSequentiallyWithActivation(subtotalButtons);
+            OnSubtotalPhaseReady();
         });
     }
 
     /// <summary>
-    /// Hook llamado cuando la cámara llega a la posición de subtotal.
+    /// Hook para cuando la fase de subtotal está lista.
     /// Las hijas sobrescriben para llamar UpdateInstructionOnce con su índice.
     /// </summary>
     protected virtual void OnSubtotalPhaseReady() { }
@@ -422,8 +507,13 @@ public abstract class LCPaymentActivityBase : ActivityBase
     }
 
     /// <summary>
-    /// Muestra el panel de éxito y configura el botón de continuar.
-    /// Antes estaba duplicado en ~8 actividades.
+    /// Muestra el panel de resumen unificado (sistema de 3 estrellas).
+    /// 
+    /// REQUIERE: 
+    /// - ActivityMetricsAdapter como componente en el GameObject
+    /// - UnifiedSummaryPanel en la escena
+    /// 
+    /// Si no hay adapter, se lanza advertencia y se llama CompleteActivity() directamente.
     /// </summary>
     protected virtual void ShowActivityComplete()
     {
@@ -431,18 +521,24 @@ public abstract class LCPaymentActivityBase : ActivityBase
         ResetValues();
         commandManager.commandList.Clear();
 
-        cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
-        {
-            continueButton.onClick.RemoveAllListeners();
-            SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
+        // Restaurar música antes de mostrar el panel
+        SoundManager.Instance.RestorePreviousMusic();
 
-            continueButton.onClick.AddListener(() =>
-            {
-                cameraController.MoveToPosition(GetStartCameraPosition());
-                CompleteActivity();
-            });
-        });
+        // Usar el sistema de 3 estrellas
+        var adapter = GetComponent<ActivityMetricsAdapter>();
+        if (adapter != null)
+        {
+            adapter.NotifyActivityCompleted();
+            // El adapter mostrará el panel y llamará CompleteActivity() cuando el usuario presione "Continuar"
+        }
+        else
+        {
+            // Sin adapter = sin panel de estrellas
+            Debug.LogWarning($"[{GetType().Name}] No hay ActivityMetricsAdapter. " +
+                           "Agrega el componente para usar UnifiedSummaryPanel.");
+            SoundManager.Instance.PlaySound("win");
+            CompleteActivity();
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
@@ -473,12 +569,16 @@ public abstract class LCPaymentActivityBase : ActivityBase
     /// <summary>
     /// Inicia la fase de competencia con música y timer.
     /// Antes estaba duplicado en ~5 actividades.
+    /// 
+    /// IMPORTANTE: Usa restartIfSame = true para reiniciar la música entre intentos.
+    /// Esto evita que la música se "pegue" en el mismo punto cuando se repiten intentos.
     /// </summary>
     protected virtual void StartCompetition()
     {
         if (activityMusicClip != null)
         {
-            SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, false);
+            // ✅ FIX: restartIfSame = true para reiniciar música entre intentos
+            SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, true);
         }
 
         if (liveTimerText != null)

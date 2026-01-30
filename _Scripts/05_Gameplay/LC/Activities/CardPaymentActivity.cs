@@ -224,7 +224,8 @@ public class CardPaymentActivity : LCPaymentActivityBase
         }
         else
         {
-            ShowActivityCompletePanel();
+            // Usar el sistema unificado de 3 estrellas
+            OnAllAttemptsComplete();
         }
     }
 
@@ -235,30 +236,16 @@ public class CardPaymentActivity : LCPaymentActivityBase
     {
         ResetValues();
         RegenerateProductValues();
-        UpdateInstructionOnce(6, StartNewAttempt, StartCompetition);
-    }
 
-    /// <summary>
-    /// Muestra el panel de éxito al completar todos los intentos.
-    /// </summary>
-    private void ShowActivityCompletePanel()
-    {
-        StopActivityTimer();
-        ResetValues();
-        commandManager.commandList.Clear();
-
-        cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
+        // StartCompetition solo después del primer intento (tutorial → práctica)
+        if (currentAttempt == 1)
         {
-            continueButton.onClick.RemoveAllListeners();
-            SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
-
-            continueButton.onClick.AddListener(() =>
-            {
-                cameraController.MoveToPosition(GetStartCameraPosition());
-                CompleteActivity();
-            });
-        });
+            UpdateInstructionOnce(6, StartNewAttempt, StartCompetition);
+        }
+        else
+        {
+            UpdateInstructionOnce(6, StartNewAttempt);
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════════════

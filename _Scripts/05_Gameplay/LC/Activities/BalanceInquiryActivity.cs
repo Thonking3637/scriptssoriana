@@ -2,105 +2,153 @@
 using System.Collections.Generic;
 using TMPro;
 using DG.Tweening;
-using System;
 using UnityEngine.UI;
 
-public class BalanceInquiryActivity: ActivityBase
+/// <summary>
+/// Actividad de Consulta de Saldo - NO hereda de LCPaymentActivityBase
+/// (No tiene productos, escaneo, ni pago)
+/// 
+/// CONFIGURACIÓN ActivityMetricsAdapter:
+/// - successesFieldName: "currentAttempt"
+/// - errorsFieldName: (vacío)
+/// - expectedTotal: 5
+/// - evaluationType: TimeBased
+/// - idealTimeSeconds: 90
+/// 
+/// Flujo de instrucciones:
+/// 0 = Inicio
+/// 1 = Consulta puntos
+/// 2 = Deslizar tarjeta
+/// 3 = Segunda posición
+/// 4 = Final posición
+/// 5 = Reiniciar
+/// </summary>
+public class BalanceInquiryActivity : ActivityBase
 {
-    [Header("Tiempo en Actividad")]
-    public TextMeshProUGUI liveTimerText;
-    public TextMeshProUGUI successTimeText;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    [Header("Timer")]
+    [SerializeField] private TextMeshProUGUI liveTimerText;
+    [SerializeField] private TextMeshProUGUI successTimeText;
 
     [Header("Card Configuration")]
-    public CardInteraction cardInteraction;
+    [SerializeField] private CardInteraction cardInteraction;
 
     [Header("UI Elements")]
-    public GameObject panelDataClient;
-    public TextMeshProUGUI clientInfoText;
-    public List<Button> consultaPuntosButtons;
+    [SerializeField] private GameObject panelDataClient;
+    [SerializeField] private TextMeshProUGUI clientInfoText;
+    [SerializeField] private List<Button> consultaPuntosButtons;
 
     [Header("Customer Configuration")]
-    public CustomerSpawner customerSpawner;
-    private GameObject currentCustomer;
-    private Client currentClient;
+    [SerializeField] private CustomerSpawner customerSpawner;
 
     [Header("Panel Success")]
-    public Button continueButton;
+    [SerializeField] private Button continueButton;
 
-    private int currentAttempt = 0;
+    // Estado
+    private GameObject currentCustomer;
+    private Client currentClient;
+    private CustomerMovement currentCustomerMovement;
+
+    [HideInInspector] public int currentAttempt = 0;
     private const int maxAttempts = 5;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
 
     protected override void Start()
     {
-        panelDataClient.gameObject.SetActive(false);
+        base.Start();
+        if (panelDataClient != null)
+            panelDataClient.SetActive(false);
     }
+
     public override void StartActivity()
     {
         base.StartActivity();
 
-        cardInteraction.OnCardMovedToFirstPosition -= HandleCardArrived;
-        cardInteraction.OnCardMovedToSecondPosition -= HandleCardMovedToSecondPosition;
-        cardInteraction.OnCardReturned -= HandleCardReturned;
+        // Suscribirse a eventos de CardInteraction
+        if (cardInteraction != null)
+        {
+            cardInteraction.OnCardMovedToFirstPosition -= HandleCardArrived;
+            cardInteraction.OnCardMovedToSecondPosition -= HandleCardMovedToSecondPosition;
+            cardInteraction.OnCardReturned -= HandleCardReturned;
 
-        cardInteraction.OnCardMovedToFirstPosition += HandleCardArrived;
-        cardInteraction.OnCardMovedToSecondPosition += HandleCardMovedToSecondPosition;
-        cardInteraction.OnCardReturned += HandleCardReturned;
+            cardInteraction.OnCardMovedToFirstPosition += HandleCardArrived;
+            cardInteraction.OnCardMovedToSecondPosition += HandleCardMovedToSecondPosition;
+            cardInteraction.OnCardReturned += HandleCardReturned;
+        }
 
+        // Configurar timer
         activityTimerText = liveTimerText;
         activityTimeText = successTimeText;
 
+        // Ocultar timer inicialmente
+        if (liveTimerText != null)
+            liveTimerText.gameObject.SetActive(false);
+
         InitializeCommands();
 
-        UpdateInstructionOnce(0, () =>
-        {
-            StartNewAttempt();
-        });
+        // Resetear intentos
+        currentAttempt = 0;
+
+        UpdateInstructionOnce(0, StartNewAttempt);
     }
 
     protected override void InitializeCommands()
     {
-        foreach (var button in consultaPuntosButtons) button.gameObject.SetActive(false);
+        foreach (var button in consultaPuntosButtons)
+            button.gameObject.SetActive(false);
 
-        CommandManager.CommandAction consultaPuntosCommand = new CommandManager.CommandAction
+        commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "CONSULTA_PUNTOS",
             customAction = HandleConsultaPuntos,
             requiredActivity = "Day2_ConsultaPrecio",
             commandButtons = consultaPuntosButtons
-        };
-        commandManager.commandList.Add(consultaPuntosCommand);
+        });
     }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FLUJO PRINCIPAL
+    // ══════════════════════════════════════════════════════════════════════════════
 
     private void StartNewAttempt()
     {
+        // Verificar si ya completamos todos los intentos
         if (currentAttempt >= maxAttempts)
         {
-            ActivityComplete();
+            OnAllAttemptsComplete();
             return;
         }
 
-        currentAttempt++;
+        // Spawnear cliente
         currentCustomer = customerSpawner.SpawnCustomer();
         currentClient = currentCustomer.GetComponent<Client>();
+        currentCustomerMovement = currentCustomer.GetComponent<CustomerMovement>();
 
-        panelDataClient.gameObject.SetActive(false);
+        // Resetear UI
+        if (panelDataClient != null)
+            panelDataClient.SetActive(false);
+        if (clientInfoText != null)
+            clientInfoText.text = "";
 
-        clientInfoText.text = ""; 
-
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-
-            cameraController.MoveToPosition("Iniciando Juego", () =>         
+        // Mover cliente al checkout
+        cameraController.MoveToPosition("Iniciando Juego", () =>
+        {
+            currentCustomerMovement.MoveToCheckout(() =>
             {
-                customerMovement.MoveToCheckout(() =>
+                cameraController.MoveToPosition("Actividad Consulta Press Button CP", () =>
                 {
-                    cameraController.MoveToPosition("Actividad Consulta Press Button CP", () =>
-                    {
-                        UpdateInstructionOnce(1);
-                        ActivateCommandButtons(consultaPuntosButtons);
-                        ActivateButtonWithSequence(consultaPuntosButtons, 0);
-                    });
+                    UpdateInstructionOnce(1);
+                    ActivateCommandButtons(consultaPuntosButtons);
+                    ActivateButtonWithSequence(consultaPuntosButtons, 0);
                 });
             });
+        });
     }
 
     public void HandleConsultaPuntos()
@@ -117,99 +165,140 @@ public class BalanceInquiryActivity: ActivityBase
             cardInteraction.gameObject.SetActive(true);
         });
     }
+
     private void HandleCardArrived()
     {
         cameraController.MoveToPosition("Actividad Consulta Segunda Posicion");
         UpdateInstructionOnce(3);
 
-        if (currentClient != null)
+        // Mostrar datos del cliente
+        if (panelDataClient != null)
         {
-            panelDataClient.gameObject.SetActive(true);
-            clientInfoText.text = $"{currentClient.clientName}\n{currentClient.purchasePoints} puntos";
+            panelDataClient.SetActive(true);
+            if (currentClient != null && clientInfoText != null)
+            {
+                clientInfoText.text = $"{currentClient.clientName}\n{currentClient.purchasePoints} puntos";
+            }
         }
-        else
-        {
-            clientInfoText.text = "Error: Client not found";
-        }        
     }
 
     private void HandleCardMovedToSecondPosition()
     {
         SoundManager.Instance.PlaySound("success");
-        UpdateInstructionOnce(3, () =>
+
+        cameraController.MoveToPosition("Actividad Consulta Final Posicion", () =>
         {
-            cameraController.MoveToPosition("Actividad Consulta Final Posicion", () =>
+            UpdateInstructionOnce(4, () =>
             {
-                UpdateInstructionOnce(4, () =>
+                DOVirtual.DelayedCall(1f, () =>
                 {
-                    DOVirtual.DelayedCall(1f, () =>
-                    {
-                        cameraController.MoveToPosition("Iniciando Juego", () =>
-                        {
-                            RestartActivity();
-                            UpdateInstructionOnce(5, StartNewAttempt, StartCompetition);
-                        });
-                    });
+                    OnAttemptComplete();
                 });
             });
         });
     }
 
-    public void RestartActivity()
-    {
-        cardInteraction.ResetCard();
-        CustomerMovement customerMovement = currentCustomer?.GetComponent<CustomerMovement>();
-        if (customerMovement != null)
-        {
-            customerMovement.MoveToExit();
-        }
-        
-    }
-
     private void HandleCardReturned()
     {
-        if (currentCustomer == null)
+        // No se usa directamente, el flujo continúa en HandleCardMovedToSecondPosition
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FINALIZACIÓN DE INTENTO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private void OnAttemptComplete()
+    {
+        currentAttempt++;
+
+        // Resetear tarjeta y mover cliente
+        cardInteraction?.ResetCard();
+        currentCustomerMovement?.MoveToExit();
+
+        // Ocultar panel de datos
+        if (panelDataClient != null)
+            panelDataClient.SetActive(false);
+
+        if (currentAttempt < maxAttempts)
         {
-            Debug.LogError("Error: No hay un cliente asignado en HandleCardReturned().");
-            return;
+            // Más intentos
+            cameraController.MoveToPosition("Iniciando Juego", () =>
+            {
+                // StartCompetition solo después del primer intento
+                if (currentAttempt == 1)
+                {
+                    UpdateInstructionOnce(5, StartNewAttempt, StartCompetition);
+                }
+                else
+                {
+                    UpdateInstructionOnce(5, StartNewAttempt);
+                }
+            });
         }
-
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-
-        if (customerMovement == null)
+        else
         {
-            Debug.LogError("Error: El cliente actual no tiene un componente 'CustomerMovement'.");
-            return;
+            // Todos los intentos completados
+            OnAllAttemptsComplete();
         }
     }
 
-    public void ActivityComplete()
+    // ══════════════════════════════════════════════════════════════════════════════
+    // COMPETENCIA Y FINALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private void StartCompetition()
+    {
+        if (activityMusicClip != null)
+        {
+            SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, true);
+        }
+
+        if (liveTimerText != null)
+        {
+            liveTimerText.gameObject.SetActive(true);
+        }
+
+        StartActivityTimer();
+    }
+
+    private void OnAllAttemptsComplete()
     {
         StopActivityTimer();
         commandManager.commandList.Clear();
 
-        cameraController.MoveToPosition("Actividad Consulta Success", () =>
+        // Restaurar música
+        SoundManager.Instance.RestorePreviousMusic();
+
+        // Usar el sistema de 3 estrellas
+        var adapter = GetComponent<ActivityMetricsAdapter>();
+        if (adapter != null)
         {
-            continueButton.onClick.RemoveAllListeners();
-            SoundManager.Instance.RestorePreviousMusic();
+            adapter.NotifyActivityCompleted();
+        }
+        else
+        {
+            Debug.LogWarning("[BalanceInquiryActivity] No hay ActivityMetricsAdapter. " +
+                           "Agrega el componente para usar UnifiedSummaryPanel.");
             SoundManager.Instance.PlaySound("win");
-
-            continueButton.onClick.AddListener(() =>
-            {
-                cameraController.MoveToPosition("Iniciando Juego");
-                CompleteActivity();
-            });
-        });
-    }
-    public void StartCompetition()
-    {
-        SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, false);
-        liveTimerText.GetComponent<TextMeshProUGUI>().enabled = true;
-        StartActivityTimer();
+            CompleteActivity();
+        }
     }
 
-    protected override void Initialize()
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void OnDisable()
     {
-        throw new NotImplementedException();
+        base.OnDisable();
+
+        if (cardInteraction != null)
+        {
+            cardInteraction.OnCardMovedToFirstPosition -= HandleCardArrived;
+            cardInteraction.OnCardMovedToSecondPosition -= HandleCardMovedToSecondPosition;
+            cardInteraction.OnCardReturned -= HandleCardReturned;
+        }
     }
+
+    protected override void Initialize() { }
 }

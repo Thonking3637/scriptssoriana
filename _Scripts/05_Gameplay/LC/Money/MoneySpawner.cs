@@ -230,6 +230,13 @@ public class MoneySpawner: MonoBehaviour
         {
             Debug.Log("Error: La cantidad entregada no es correcta.");
             SoundManager.Instance.PlaySound("error");
+
+            var activity = FindObjectOfType<CashPaymentActivity>();
+            if (activity != null)
+            {
+                activity.OnIncorrectChangeGiven();
+            }
+
             return;
         }
 

@@ -1,3 +1,9 @@
+﻿// ═══════════════════════════════════════════════════════════════════════════════
+// ProgressService.cs
+// Servicio de progreso con integración completa a Firebase
+// Maneja: attempts con score/mistakes, medals, y sincronización remota
+// ═══════════════════════════════════════════════════════════════════════════════
+
 using Firebase.Firestore;
 using System;
 using System.Collections;
@@ -16,10 +22,18 @@ public class ProgressService : MonoBehaviour
     [SerializeField] private bool enableRemoteMedals = true;
     [SerializeField] private float remoteTimeoutSeconds = 6f;
 
+    [Header("Attempt Recording")]
+    [Tooltip("Si está activo, guarda cada attempt en Firebase con score y mistakes")]
+    [SerializeField] private bool enableAttemptRecording = true;
+
     private FirebaseFirestore _db;
     private bool _remoteBusy;
 
     public event Action OnRemoteProgressUpdated;
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // LIFECYCLE
+    // ═════════════════════════════════════════════════════════════════════════════
 
     private void Awake()
     {
@@ -53,9 +67,9 @@ public class ProgressService : MonoBehaviour
         }
     }
 
-    // =========================
-    // ATTEMPTS (Activity timing)
-    // =========================
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ATTEMPTS (Activity timing + scoring)
+    // ═════════════════════════════════════════════════════════════════════════════
 
     public void StartAttempt(string moduleId, string activityId, Action<string> onAttemptCreated)
     {
@@ -72,18 +86,146 @@ public class ProgressService : MonoBehaviour
         int durationSec,
         bool completed,
         int? score,
-        int? mistakes
-    )
+        int? mistakes)
     {
+        // ═══════════════════════════════════════════════════════════════════════════
+        // PASO 1: Si score/mistakes son null, intentar obtenerlos del ActivityScoringService
+        // ═══════════════════════════════════════════════════════════════════════════
+        int? finalScore = score;
+        int? finalMistakes = mistakes;
+
+        if (completed && (!finalScore.HasValue || !finalMistakes.HasValue))
+        {
+            var scoreData = GetScoreDataFromScoringService(activityId);
+            if (scoreData != null)
+            {
+                if (!finalScore.HasValue)
+                    finalScore = scoreData.score;
+
+                if (!finalMistakes.HasValue)
+                    finalMistakes = scoreData.errors;
+
+                Debug.Log($"[ProgressService] ✅ Métricas obtenidas de ScoringService: score={finalScore}, mistakes={finalMistakes}");
+            }
+            else
+            {
+                Debug.LogWarning($"[ProgressService] ⚠️ No se encontraron métricas en ScoringService para {activityId}");
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // PASO 2: Log con datos completos
+        // ═══════════════════════════════════════════════════════════════════════════
         Debug.Log(
             $"[ProgressService] END Attempt {attemptId} | " +
-            $"dur={durationSec}s completed={completed} score={score} mistakes={mistakes}"
+            $"dur={durationSec}s completed={completed} score={finalScore} mistakes={finalMistakes}"
         );
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // PASO 3: Guardar en Firebase si está habilitado
+        // ═══════════════════════════════════════════════════════════════════════════
+        if (enableAttemptRecording && completed)
+        {
+            _ = RecordAttemptToFirebaseAsync(attemptId, moduleId, activityId, durationSec, finalScore, finalMistakes);
+        }
     }
 
-    // =========================
+    /// <summary>
+    /// Obtiene los datos de score del ActivityScoringService
+    /// </summary>
+    private ActivityScoreData GetScoreDataFromScoringService(string activityId)
+    {
+        if (string.IsNullOrEmpty(activityId))
+            return null;
+
+        if (ActivityScoringService.Instance == null)
+        {
+            Debug.LogWarning("[ProgressService] ActivityScoringService.Instance es null");
+            return null;
+        }
+
+        return ActivityScoringService.Instance.GetBestScore(activityId);
+    }
+
+    /// <summary>
+    /// Guarda el attempt en Firebase usando el FirestoreProgressWriter existente
+    /// </summary>
+    private async Task RecordAttemptToFirebaseAsync(
+        string attemptId,
+        string moduleId,
+        string activityId,
+        int durationSec,
+        int? score,
+        int? mistakes)
+    {
+        try
+        {
+            var session = SessionContext.Instance;
+            if (session == null || !session.IsLoggedIn)
+            {
+                Debug.LogWarning("[ProgressService] Usuario no logueado, skip attempt recording");
+                return;
+            }
+
+            // Buscar el writer
+            var writer = FindObjectOfType<FirestoreProgressWriter>();
+            if (writer == null)
+            {
+                Debug.LogWarning("[ProgressService] FirestoreProgressWriter no encontrado");
+                return;
+            }
+
+            // ═══════════════════════════════════════════════════════════════════════════
+            // Usar el método RecordScoreAsync que ya tienes en tu extensión
+            // Esto guarda en: users/{uid}/activities/{activityId}/attempts/{attemptId}
+            // ═══════════════════════════════════════════════════════════════════════════
+
+            // Crear ActivityScoreData con los datos del attempt
+            var scoreData = ActivityScoringService.Instance?.GetBestScore(activityId);
+
+            if (scoreData != null)
+            {
+                // Ya tenemos datos completos del ScoringService
+                await writer.RecordScoreAsync(session.Uid, scoreData);
+                Debug.Log($"[ProgressService] ✅ Score completo guardado en Firebase: {activityId}");
+            }
+            else
+            {
+                // Crear datos mínimos si no hay ScoringService
+                var minimalData = new ActivityScoreData
+                {
+                    activityId = activityId,
+                    score = score ?? 0,
+                    stars = CalculateStarsFromScore(score ?? 0),
+                    errors = mistakes ?? 0,
+                    timeSeconds = durationSec,
+                    timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                };
+
+                await writer.RecordScoreAsync(session.Uid, minimalData);
+                Debug.Log($"[ProgressService] ✅ Score mínimo guardado en Firebase: {activityId}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[ProgressService] Error guardando attempt en Firebase: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Calcula estrellas basado en score (fallback si no hay config)
+    /// </summary>
+    private int CalculateStarsFromScore(int score)
+    {
+        if (score >= 90) return 3;
+        if (score >= 75) return 2;
+        if (score >= 50) return 1;
+        return 0;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════════
     // MEDALS (Local Earn hook)
-    // =========================
+    // ═════════════════════════════════════════════════════════════════════════════
 
     public void OnLocalMedalEarned(string sceneName, int activityIndex)
     {
@@ -106,14 +248,11 @@ public class ProgressService : MonoBehaviour
         string role = (s != null && s.IsLoggedIn) ? s.RoleId : "";
 
         Debug.Log($"[ProgressService] MEDAL Earned -> {activityId} | uid={uid} emp={emp} store={store} role={role}");
-
-        // (Tu escritura a Firestore de medals ya existe en tu flujo actual)
-        // Esto solo es el hook.
     }
 
-    // =========================
+    // ═════════════════════════════════════════════════════════════════════════════
     // REMOTE MEDALS (Menu reads)
-    // =========================
+    // ═════════════════════════════════════════════════════════════════════════════
 
     public void TryRefreshRemoteMedals()
     {
@@ -232,5 +371,4 @@ public class ProgressService : MonoBehaviour
             Debug.LogError($"[ProgressService] CommitMedal failed: {ex.GetType().Name} {ex.Message}");
         }
     }
-
 }

@@ -1,9 +1,10 @@
-﻿using System;
-using System.Threading.Tasks;
-using UnityEngine;
-using Firebase;
+﻿using Firebase;
 using Firebase.Auth;
 using Firebase.Firestore;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using UnityEngine;
 
 public class FirebaseAuthService : MonoBehaviour, IAuthService
 {
@@ -343,6 +344,13 @@ public class FirebaseAuthService : MonoBehaviour, IAuthService
                 return;
             }
 
+            if (string.IsNullOrWhiteSpace(storeId))
+                storeId = PlayerPrefs.GetString(PP_STORE, "").Trim();
+
+            if (string.IsNullOrWhiteSpace(roleId))
+                roleId = PlayerPrefs.GetString(PP_ROLE, "");
+
+
             // ✅ 3) Guardar sesión y entrar AL MENÚ primero (NO bloqueamos por Firestore)
             PlayerPrefs.SetString(PP_EMPLOYEE, employeeCode);
             PlayerPrefs.SetString(PP_STORE, storeId);
@@ -388,7 +396,14 @@ public class FirebaseAuthService : MonoBehaviour, IAuthService
         }
     }
 
-    private async Task UpsertUserProfileSafe(string uid, string employeeCode, string storeId, string roleId, string firstName = "", string lastName = "")
+    private async Task UpsertUserProfileSafe(
+         string uid,
+         string employeeCode,
+         string storeId,
+         string roleId,
+         string firstName = "",
+         string lastName = ""
+     )
     {
         try
         {
@@ -396,25 +411,29 @@ public class FirebaseAuthService : MonoBehaviour, IAuthService
 
             var doc = _db.Collection("users").Document(uid);
 
-            var data = new System.Collections.Generic.Dictionary<string, object>
+            var data = new Dictionary<string, object>
             {
-                ["employeeCode"] = employeeCode,
-                ["storeId"] = storeId,
-                ["role"] = roleId ?? "",
-                ["firstName"] = firstName ?? "",
-                ["lastName"] = lastName ?? "",
+                ["employeeCode"] = employeeCode ?? "",
                 ["updatedAt"] = FieldValue.ServerTimestamp
             };
 
-            var upsertTask = doc.SetAsync(data, SetOptions.MergeAll);
-            var timeout = Task.Delay((int)(firestoreTimeoutSeconds * 1000));
+            AddIfValid(data, "storeId", storeId);
+            AddIfValid(data, "role", roleId);
+            AddIfValid(data, "firstName", firstName);
+            AddIfValid(data, "lastName", lastName);
 
-            var done = await Task.WhenAny(upsertTask, timeout);
-            if (done == timeout) return;
-
-            await upsertTask;
+            await doc.SetAsync(data, SetOptions.MergeAll);
         }
-        catch (Exception ex) { LogFirebaseException("[FirebaseAuth] UpsertUserProfile failed", ex); }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Firestore] UpsertUserProfileSafe failed: {e.Message}");
+        }
+    }
+
+    private static void AddIfValid(Dictionary<string, object> target, string key, string value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            target[key] = value.Trim();
     }
 
     public void SignOut()

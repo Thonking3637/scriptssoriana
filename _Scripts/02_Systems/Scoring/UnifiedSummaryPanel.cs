@@ -2,6 +2,9 @@
 // UnifiedSummaryPanel.cs
 // Panel de resumen unificado con sistema de 3 estrellas
 // Se muestra al final de TODAS las actividades
+// 
+// FIX: En actividades TimeBased, no muestra "Precisión" (que podía ser >100%)
+//      En su lugar muestra solo TIEMPO y oculta ERRORES
 // ═══════════════════════════════════════════════════════════════════════════════
 
 using UnityEngine;
@@ -25,9 +28,9 @@ public class UnifiedSummaryPanel : MonoBehaviour
     [Header("Textos")]
     [SerializeField] private TextMeshProUGUI txtQuality;      // "EXCELENTE", "MUY BIEN", etc.
     [SerializeField] private TextMeshProUGUI txtScore;        // "95/100"
-    [SerializeField] private TextMeshProUGUI txtAccuracy;     // "Precisión: 100%"
+    [SerializeField] private TextMeshProUGUI txtAccuracy;     // "Precisión: 100%" (solo AccuracyBased)
     [SerializeField] private TextMeshProUGUI txtTime;         // "Tiempo: 45s"
-    [SerializeField] private TextMeshProUGUI txtErrors;       // "Errores: 0"
+    [SerializeField] private TextMeshProUGUI txtErrors;       // "Errores: 0" (solo si hay errores)
     [SerializeField] private TextMeshProUGUI txtCustomMessage; // Mensaje personalizado
 
     [Header("Badge de Récord")]
@@ -51,7 +54,8 @@ public class UnifiedSummaryPanel : MonoBehaviour
     // Estado
     private ActivityScoreData _currentData;
     private string _currentActivityId;
-    private ActivityBase _targetActivity; // ← NUEVO: Referencia a la actividad para llamar CompleteActivity()
+    private ActivityBase _targetActivity;
+    private bool _isTimeBased; // ← NUEVO: Flag para saber el tipo de evaluación
 
     // ═════════════════════════════════════════════════════════════════════════════
     // LIFECYCLE
@@ -105,7 +109,10 @@ public class UnifiedSummaryPanel : MonoBehaviour
     public void Show(ActivityMetrics metrics, string activityId, string customMessage, ActivityBase activity)
     {
         _currentActivityId = activityId;
-        _targetActivity = activity; // ← Guardar referencia para llamar CompleteActivity() después
+        _targetActivity = activity;
+
+        // ✅ NUEVO: Detectar si es TimeBased revisando el ActivityMetricsAdapter
+        _isTimeBased = DetectIfTimeBased(activity);
 
         // Crear datos
         _currentData = new ActivityScoreData
@@ -127,6 +134,28 @@ public class UnifiedSummaryPanel : MonoBehaviour
 
         // Mostrar panel
         ShowPanel(_currentData, isNewRecord);
+    }
+
+    /// <summary>
+    /// Detecta si la actividad usa evaluación TimeBased
+    /// </summary>
+    private bool DetectIfTimeBased(ActivityBase activity)
+    {
+        if (activity == null) return false;
+
+        var adapter = activity.GetComponent<ActivityMetricsAdapter>();
+        if (adapter == null) return false;
+
+        // Usar reflection para obtener el tipo de evaluación
+        var scoringConfigField = typeof(ActivityMetricsAdapter).GetField("scoringConfig",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        if (scoringConfigField == null) return false;
+
+        var scoringConfig = scoringConfigField.GetValue(adapter) as ScoringConfig;
+        if (scoringConfig == null) return false;
+
+        return scoringConfig.evaluationType == EvaluationType.TimeBased;
     }
 
     /// <summary>
@@ -194,42 +223,67 @@ public class UnifiedSummaryPanel : MonoBehaviour
             txtScore.text = $"PUNTUACIÓN: {data.score}/100";
         }
 
-        // Precisión - Solo si hay datos
-        if (txtAccuracy != null)
+        // ═════════════════════════════════════════════════════════════════════════
+        // ✅ FIX: Mostrar diferente según el tipo de evaluación
+        // ═════════════════════════════════════════════════════════════════════════
+
+        if (_isTimeBased)
         {
-            bool hasAccuracyData = data.successes > 0 || data.errors > 0;
-            txtAccuracy.gameObject.SetActive(hasAccuracyData);
-            if (hasAccuracyData)
+            // TimeBased: NO mostrar precisión (podría ser >100%), SÍ mostrar tiempo
+            if (txtAccuracy != null)
             {
-                txtAccuracy.text = $"Precisión: {data.accuracy:F1}%";
+                txtAccuracy.gameObject.SetActive(false);
+            }
+
+            if (txtTime != null)
+            {
+                txtTime.gameObject.SetActive(true);
+                txtTime.text = $"TIEMPO: {FormatTime(data.timeSeconds)}";
+            }
+
+            // TimeBased: NO mostrar errores (no aplica)
+            if (txtErrors != null)
+            {
+                txtErrors.gameObject.SetActive(false);
             }
         }
-
-        // Tiempo - Solo si > 0
-        if (txtTime != null)
+        else
         {
-            bool hasTimeData = data.timeSeconds > 0;
-            txtTime.gameObject.SetActive(hasTimeData);
-            if (hasTimeData)
-            {
-                int minutes = Mathf.FloorToInt(data.timeSeconds / 60f);
-                int seconds = Mathf.FloorToInt(data.timeSeconds % 60f);
+            // AccuracyBased o ComboMetric: Mostrar precisión y errores
 
-                if (minutes > 0)
-                    txtTime.text = $"Tiempo: {minutes}:{seconds:D2}";
-                else
-                    txtTime.text = $"Tiempo: {seconds}s";
+            // Precisión - Solo si hay datos relevantes
+            if (txtAccuracy != null)
+            {
+                bool hasAccuracyData = data.successes > 0 || data.errors > 0;
+                txtAccuracy.gameObject.SetActive(hasAccuracyData);
+                if (hasAccuracyData)
+                {
+                    // Clampear precisión a 100% máximo para mostrar
+                    float displayAccuracy = Mathf.Min(data.accuracy, 100f);
+                    txtAccuracy.text = $"PRECISIÓN: {displayAccuracy:F1}%";
+                }
             }
-        }
 
-        // Errores - Solo si hay sistema de errores
-        if (txtErrors != null)
-        {
-            bool hasErrorTracking = data.successes > 0 || data.errors > 0;
-            txtErrors.gameObject.SetActive(hasErrorTracking);
-            if (hasErrorTracking)
+            // Tiempo - Solo si > 0
+            if (txtTime != null)
             {
-                txtErrors.text = $"Errores: {data.errors}";
+                bool hasTimeData = data.timeSeconds > 0;
+                txtTime.gameObject.SetActive(hasTimeData);
+                if (hasTimeData)
+                {
+                    txtTime.text = $"TIEMPO: {FormatTime(data.timeSeconds)}";
+                }
+            }
+
+            // Errores - Solo si hay sistema de errores
+            if (txtErrors != null)
+            {
+                bool hasErrorTracking = data.successes > 0 || data.errors > 0;
+                txtErrors.gameObject.SetActive(hasErrorTracking);
+                if (hasErrorTracking)
+                {
+                    txtErrors.text = $"ERRORES: {data.errors}";
+                }
             }
         }
 
@@ -238,6 +292,22 @@ public class UnifiedSummaryPanel : MonoBehaviour
         {
             txtCustomMessage.text = data.customMessage;
         }
+    }
+
+    /// <summary>
+    /// Formatea el tiempo en formato legible
+    /// </summary>
+    private string FormatTime(float seconds)
+    {
+        if (seconds <= 0) return "0s";
+
+        int minutes = Mathf.FloorToInt(seconds / 60f);
+        int secs = Mathf.FloorToInt(seconds % 60f);
+
+        if (minutes > 0)
+            return $"{minutes}:{secs:D2}";
+        else
+            return $"{secs}s";
     }
 
     // ═════════════════════════════════════════════════════════════════════════════

@@ -85,6 +85,9 @@ public class IntroPuertasSequence : MonoBehaviour
         if (loginPanel) loginPanel.SetActive(false);
 
         seqRoutine = StartCoroutine(PlaySequence(yaVisto));
+
+        Debug.Log($"Level1 count en PlayerPrefs: {PlayerPrefs.GetInt("SCENE_COUNT_Level1", -1)}");
+        Debug.Log($"Level2 count en PlayerPrefs: {PlayerPrefs.GetInt("SCENE_COUNT_Level2", -1)}");
     }
 
     IEnumerator PlaySequence(bool mostrarSkipDesdeInicio)

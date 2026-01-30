@@ -21,6 +21,13 @@ using UnityEngine.UI;
 /// 6 = Aplicar descuento
 /// 7 = Ticket
 /// 8 = Reiniciar
+/// 
+/// CONFIGURACIÓN ActivityMetricsAdapter:
+/// - successesFieldName: "currentAttempt"
+/// - errorsFieldName: (vacío)
+/// - expectedTotal: 3
+/// - evaluationType: TimeBased
+/// - idealTimeSeconds: 120
 /// </summary>
 public class RedeemPointsActivity : LCPaymentActivityBase
 {
@@ -334,7 +341,8 @@ public class RedeemPointsActivity : LCPaymentActivityBase
     {
         if (currentAttempt >= maxAttempts)
         {
-            ShowActivityCompletePanel();
+            // ✅ ÚNICO CAMBIO: Usar OnAllAttemptsComplete() en vez de ShowActivityCompletePanel()
+            OnAllAttemptsComplete();
             return;
         }
 
@@ -359,30 +367,6 @@ public class RedeemPointsActivity : LCPaymentActivityBase
             {
                 SpawnAndBindProduct();
                 OnCustomerReady();
-            });
-        });
-    }
-
-    /// <summary>
-    /// Muestra el panel de éxito.
-    /// </summary>
-    private void ShowActivityCompletePanel()
-    {
-        StopActivityTimer();
-        ResetValues();
-        commandManager.commandList.Clear();
-
-        cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
-        {
-            continueButton.onClick.RemoveAllListeners();
-            SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
-
-            continueButton.onClick.AddListener(() =>
-            {
-                cameraController.MoveToPosition(GetStartCameraPosition());
-                cardInteraction.ResetCard();
-                CompleteActivity();
             });
         });
     }

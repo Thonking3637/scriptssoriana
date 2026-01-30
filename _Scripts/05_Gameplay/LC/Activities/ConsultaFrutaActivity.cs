@@ -38,7 +38,6 @@ public class ConsultaFrutaActivity : ActivityBase
 
     [Header("Panel de Preguntas")]
     public GameObject questionPanel;
-    public GameObject successPanel;
     public TextMeshProUGUI questionText;
     public List<Button> answerButtons;
     public Button continueButton;
@@ -455,7 +454,6 @@ public class ConsultaFrutaActivity : ActivityBase
         {
             StopActivityTimer();
             SoundManager.Instance.RestorePreviousMusic();
-            successPanel.transform.localScale = Vector3.one;
 
             var adapter = GetComponent<ActivityMetricsAdapter>();
             if (adapter != null)
