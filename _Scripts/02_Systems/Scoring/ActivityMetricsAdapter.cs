@@ -3,18 +3,27 @@
 // Componente NO INVASIVO que se adjunta a cualquier ActivityBase
 // Lee métricas por reflection y las normaliza para el Orquestador
 // 
-// ACTUALIZACIÓN: Ahora soporta ActivitySummaryConfig para mensajes dinámicos
+// TIPOS DE EVALUACIÓN:
+// - AccuracyBased: Solo errores importan (ej: CashPayment)
+// - TimeBased: Solo velocidad importa (ej: CardPayment)
+// - ComboMetric: Combinación de accuracy + speed + efficiency
+// - GuidedActivity: Sin métricas, siempre 100% si completa (ej: CashRegisterActivation)
+// - CustomMetrics: La actividad pasa sus métricas directamente (ej: ScanActivity)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 using UnityEngine;
 using System.Reflection;
 
-/// <summary>
-/// Wrapper que lee métricas de cualquier actividad y las traduce a formato unificado.
-/// Se AGREGA al GameObject, NO reemplaza la actividad existente.
-/// </summary>
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
 public class ActivityMetricsAdapter : MonoBehaviour
 {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN BÁSICA
+    // ═══════════════════════════════════════════════════════════════════════════
+
     [Header("Configuración")]
     [SerializeField] private ActivityBase targetActivity;
     [SerializeField] private string activityId = "FYV_A1";
@@ -32,13 +41,53 @@ public class ActivityMetricsAdapter : MonoBehaviour
     [Header("Configuración de Scoring")]
     [SerializeField] private ScoringConfig scoringConfig;
 
-    // Estado interno
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CUSTOM METRICS (para actividades con métricas propias como ScanActivity)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    [Header("═══ Custom Metrics (Solo para CustomMetrics) ═══")]
+    [Tooltip("Texto personalizado para la línea 1 del resumen (ej: 'PRODUCTOS')")]
+    [SerializeField] private string customLabel1 = "PRODUCTOS";
+
+    [Tooltip("Texto personalizado para la línea 2 del resumen (ej: 'TIEMPO')")]
+    [SerializeField] private string customLabel2 = "TIEMPO";
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MODO CALIBRACIÓN
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    [Header("═══ MODO CALIBRACIÓN (Solo Editor) ═══")]
+    [Tooltip("Activa esto, juega la actividad perfectamente, y al terminar tu tiempo se guardará como idealTimeSeconds")]
+    [SerializeField] private bool calibrationMode = false;
+
+    [Tooltip("Multiplicador de margen. Ej: 1.2 = tu tiempo + 20% extra para el jugador")]
+    [Range(1.0f, 2.0f)]
+    [SerializeField] private float calibrationMargin = 1.2f;
+
+    [Tooltip("Último tiempo calibrado (solo lectura)")]
+    [SerializeField] private float lastCalibratedTime = 0f;
+
+    [Tooltip("Fecha de última calibración")]
+    [SerializeField] private string lastCalibrationDate = "";
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ESTADO INTERNO
+    // ═══════════════════════════════════════════════════════════════════════════
+
     private ActivityMetrics _metrics = new ActivityMetrics();
     private bool _hasCompleted = false;
 
-    // ═════════════════════════════════════════════════════════════════════════════
+    // Para CustomMetrics - valores seteados externamente
+    private bool _useCustomMetrics = false;
+    private int _customValue1;
+    private int _customTotal1;
+    private float _customTimeSeconds;
+    private string _customDisplayLine1;
+    private string _customDisplayLine2;
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // LIFECYCLE
-    // ═════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private void Awake()
     {
@@ -55,29 +104,16 @@ public class ActivityMetricsAdapter : MonoBehaviour
 
     private void OnEnable()
     {
-        // ⚠️ IMPORTANTE: NO suscribirse al evento OnActivityComplete automáticamente
-        // porque crea un race condition con el GameManager
-        // 
-        // La actividad debe llamar NotifyActivityCompleted() manualmente ANTES
-        // de llamar CompleteActivity() para prevenir que GameManager avance
-
         _hasCompleted = false;
+        _useCustomMetrics = false;
     }
 
-    private void OnDisable()
-    {
-        // Ya no hay evento al que desuscribirse
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════════
-    // API PÚBLICA - LLAMADA MANUAL DESDE LA ACTIVIDAD
-    // ═════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
+    // API PÚBLICA - NOTIFICACIÓN ESTÁNDAR
+    // ═══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Método público para que la actividad notifique manualmente que ha terminado.
-    /// 
-    /// IMPORTANTE: Llamar este método ANTES de llamar CompleteActivity() para prevenir
-    /// el race condition con el GameManager.
+    /// Notificación estándar: extrae métricas automáticamente
     /// </summary>
     public void NotifyActivityCompleted()
     {
@@ -86,9 +122,26 @@ public class ActivityMetricsAdapter : MonoBehaviour
 
         Debug.Log("[Adapter] ✅ Actividad completada (notificación manual)");
 
-        // ✅ LLAMAR DIRECTAMENTE a los métodos sin pasar por OnActivityCompleted()
+        // Si es GuidedActivity, usar flujo simplificado
+        if (scoringConfig.evaluationType == EvaluationType.GuidedActivity)
+        {
+            HandleGuidedActivityCompletion();
+            return;
+        }
+
+        // Si hay custom metrics pendientes, usarlas
+        if (_useCustomMetrics)
+        {
+            HandleCustomMetricsCompletion();
+            return;
+        }
+
+        // Flujo estándar
         Debug.Log("[Adapter] Extrayendo métricas...");
         ExtractMetrics();
+
+        if (calibrationMode)
+            HandleCalibration();
 
         Debug.Log("[Adapter] Calculando score...");
         CalculateScore();
@@ -100,57 +153,213 @@ public class ActivityMetricsAdapter : MonoBehaviour
         ShowSummaryPanel();
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════
-    // CORE: EXTRACCIÓN Y EVALUACIÓN
-    // ═════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
+    // API PÚBLICA - CUSTOM METRICS (Para ScanActivity, etc.)
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    private void OnActivityCompleted()
+    /// <summary>
+    /// Permite a la actividad pasar sus propias métricas.
+    /// Úsalo para actividades con sistemas de scoring personalizados.
+    /// 
+    /// Ejemplo ScanActivity:
+    ///   adapter.SetCustomMetrics(
+    ///     value1: scannedCount,      // 18
+    ///     total1: minProductsToScan, // 18
+    ///     timeSeconds: timeElapsed,  // 45.5f
+    ///     displayLine1: "PRODUCTOS: 18/18",
+    ///     displayLine2: "TIEMPO: 45s"
+    ///   );
+    ///   adapter.NotifyActivityCompleted();
+    /// </summary>
+    public void SetCustomMetrics(int value1, int total1, float timeSeconds,
+                                  string displayLine1 = null, string displayLine2 = null)
     {
-        if (_hasCompleted) return;
-        _hasCompleted = true;
+        _useCustomMetrics = true;
+        _customValue1 = value1;
+        _customTotal1 = total1;
+        _customTimeSeconds = timeSeconds;
+        _customDisplayLine1 = displayLine1;
+        _customDisplayLine2 = displayLine2;
 
-        Debug.Log("[Adapter] ✅ Actividad completada detectada");
-
-        // 1. Extraer métricas
-        ExtractMetrics();
-
-        // 2. Calcular score
-        CalculateScore();
-
-        // 3. Guardar resultado
-        SaveResult();
-
-        // 4. Mostrar panel de resumen
-        ShowSummaryPanel();
+        Debug.Log($"[Adapter] Custom metrics set: {value1}/{total1}, time={timeSeconds:F1}s");
     }
 
     /// <summary>
-    /// Extrae métricas de la actividad usando reflection o acceso directo
+    /// Versión simplificada para actividades que solo tienen completado/tiempo
     /// </summary>
+    public void SetCustomMetrics(float timeSeconds, bool completed = true)
+    {
+        SetCustomMetrics(
+            value1: completed ? 1 : 0,
+            total1: 1,
+            timeSeconds: timeSeconds
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // GUIDED ACTIVITY (Sin métricas, siempre perfecto)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void HandleGuidedActivityCompletion()
+    {
+        Debug.Log("[Adapter] 🎯 GuidedActivity - Asignando score perfecto");
+
+        // Score perfecto
+        _metrics.score = 100;
+        _metrics.stars = 3;
+        _metrics.successes = 1;
+        _metrics.errors = 0;
+        _metrics.total = 1;
+        _metrics.timeSeconds = 0; // No mostrar tiempo
+
+        // Guardar y mostrar
+        SaveResult();
+        ShowSummaryPanel();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CUSTOM METRICS (Actividades con sistema propio)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void HandleCustomMetricsCompletion()
+    {
+        Debug.Log("[Adapter] 🎯 CustomMetrics - Usando métricas proporcionadas");
+
+        // Asignar métricas custom
+        _metrics.successes = _customValue1;
+        _metrics.total = _customTotal1;
+        _metrics.errors = Mathf.Max(0, _customTotal1 - _customValue1);
+        _metrics.timeSeconds = _customTimeSeconds;
+
+        // Calcular score basado en completion ratio
+        float completionRatio = _customTotal1 > 0 ? (float)_customValue1 / _customTotal1 : 1f;
+
+        // Si hay idealTime configurado, también considerar el tiempo
+        if (scoringConfig.idealTimeSeconds > 0 && _customTimeSeconds > 0)
+        {
+            float timeRatio = Mathf.Clamp01(scoringConfig.idealTimeSeconds / _customTimeSeconds);
+            // 70% completion + 30% tiempo
+            _metrics.score = Mathf.RoundToInt((completionRatio * 70f) + (timeRatio * 30f));
+        }
+        else
+        {
+            // Solo completion
+            _metrics.score = Mathf.RoundToInt(completionRatio * 100f);
+        }
+
+        _metrics.score = Mathf.Clamp(_metrics.score, 0, 100);
+        _metrics.stars = CalculateStars(_metrics.score);
+
+        // Guardar mensaje custom si se proporcionó
+        if (!string.IsNullOrEmpty(_customDisplayLine1) || !string.IsNullOrEmpty(_customDisplayLine2))
+        {
+            // Construir mensaje custom
+            string customMsg = "";
+            if (!string.IsNullOrEmpty(_customDisplayLine1))
+                customMsg += _customDisplayLine1;
+            if (!string.IsNullOrEmpty(_customDisplayLine2))
+                customMsg += (string.IsNullOrEmpty(customMsg) ? "" : "\n") + _customDisplayLine2;
+
+            customMessage = customMsg;
+        }
+
+        Debug.Log($"[Adapter] CustomMetrics Score: {_metrics.score}/100, Stars: {_metrics.stars}");
+
+        // Guardar y mostrar
+        SaveResult();
+        ShowSummaryPanel();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CALIBRACIÓN
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void HandleCalibration()
+    {
+#if UNITY_EDITOR
+        if (_metrics.timeSeconds <= 0)
+        {
+            Debug.LogWarning("[Adapter] ⚠️ CALIBRACIÓN: Tiempo es 0, no se puede calibrar");
+            return;
+        }
+
+        lastCalibratedTime = _metrics.timeSeconds;
+        lastCalibrationDate = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm");
+
+        float newIdealTime = _metrics.timeSeconds * calibrationMargin;
+
+        Debug.Log($"[Adapter] ════════════════════════════════════════════════");
+        Debug.Log($"[Adapter] 🎯 CALIBRACIÓN COMPLETADA");
+        Debug.Log($"[Adapter] Tu tiempo: {_metrics.timeSeconds:F2}s");
+        Debug.Log($"[Adapter] Margen: x{calibrationMargin}");
+        Debug.Log($"[Adapter] Nuevo idealTimeSeconds: {newIdealTime:F2}s");
+        Debug.Log($"[Adapter] ════════════════════════════════════════════════");
+
+        float oldIdealTime = scoringConfig.idealTimeSeconds;
+        scoringConfig.idealTimeSeconds = newIdealTime;
+
+        EditorUtility.SetDirty(this);
+
+        bool keepCalibrationMode = EditorUtility.DisplayDialog(
+            "🎯 Calibración Completada",
+            $"Tu tiempo: {_metrics.timeSeconds:F2}s\n" +
+            $"Margen aplicado: x{calibrationMargin}\n\n" +
+            $"idealTimeSeconds actualizado:\n" +
+            $"  Antes: {oldIdealTime:F2}s\n" +
+            $"  Ahora: {newIdealTime:F2}s\n\n" +
+            $"¿Mantener modo calibración activo?",
+            "Sí, seguir calibrando",
+            "No, desactivar"
+        );
+
+        if (!keepCalibrationMode)
+        {
+            calibrationMode = false;
+            EditorUtility.SetDirty(this);
+        }
+#else
+        Debug.LogWarning("[Adapter] ⚠️ Modo calibración solo funciona en el Editor");
+#endif
+    }
+
+    [ContextMenu("Reset Calibración")]
+    private void ResetCalibration()
+    {
+#if UNITY_EDITOR
+        lastCalibratedTime = 0f;
+        lastCalibrationDate = "";
+        scoringConfig.idealTimeSeconds = 60f;
+        EditorUtility.SetDirty(this);
+        Debug.Log("[Adapter] 🔄 Calibración reseteada");
+#endif
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // EXTRACCIÓN DE MÉTRICAS
+    // ═══════════════════════════════════════════════════════════════════════════
+
     private void ExtractMetrics()
     {
-        // CASO 1: PhasedActivityBasePro (tiene métricas built-in)
+        // CASO 1: PhasedActivityBasePro
         if (targetActivity is PhasedActivityBasePro pro)
         {
             _metrics.successes = pro.aciertosTotales;
             _metrics.errors = pro.erroresTotales;
             _metrics.dispatches = pro.despachosTotales;
             _metrics.timeSeconds = pro.tiempoEmpleado;
-            _metrics.total = metricsConfig.expectedTotal > 0 ? metricsConfig.expectedTotal : pro.aciertosTotales + pro.erroresTotales;
+            _metrics.total = metricsConfig.expectedTotal > 0
+                ? metricsConfig.expectedTotal
+                : pro.aciertosTotales + pro.erroresTotales;
 
             Debug.Log($"[Adapter] Métricas Pro: {_metrics.successes}/{_metrics.total}, errors={_metrics.errors}, time={_metrics.timeSeconds:F1}s");
             return;
         }
 
-        // CASO 2: Usar configuración manual con reflection
+        // CASO 2: Reflection
         _metrics = ExtractUsingReflection(targetActivity, metricsConfig);
-
         Debug.Log($"[Adapter] Métricas Reflection: {_metrics.successes}/{_metrics.total}, errors={_metrics.errors}, time={_metrics.timeSeconds:F1}s");
     }
 
-    /// <summary>
-    /// Extrae métricas usando reflection basado en configuración
-    /// </summary>
     private ActivityMetrics ExtractUsingReflection(ActivityBase activity, MetricsSourceConfig config)
     {
         var metrics = new ActivityMetrics();
@@ -170,20 +379,17 @@ public class ActivityMetricsAdapter : MonoBehaviour
             metrics.errors = ConvertToInt(value);
         }
 
-        // Extraer dispatches (opcional)
+        // Extraer dispatches
         if (!string.IsNullOrEmpty(config.dispatchesFieldName))
         {
             var value = GetFieldValue(type, activity, config.dispatchesFieldName);
             metrics.dispatches = ConvertToInt(value);
         }
 
-        // Tiempo: usar el ActivityBase.activityTimeText si existe
-        if (activity.activityTimeText != null)
-        {
-            metrics.timeSeconds = ParseTimeFromText(activity.activityTimeText.text);
-        }
+        // Tiempo
+        metrics.timeSeconds = GetElapsedTimeFromActivity(activity);
 
-        // Total esperado
+        // Total
         if (metrics.errors > 0)
         {
             metrics.total = metrics.successes + metrics.errors;
@@ -200,72 +406,99 @@ public class ActivityMetricsAdapter : MonoBehaviour
         return metrics;
     }
 
-    /// <summary>
-    /// Obtiene valor de campo usando reflection (soporta campos privados y propiedades)
-    /// </summary>
+    private float GetElapsedTimeFromActivity(ActivityBase activity)
+    {
+        var baseType = typeof(ActivityBase);
+        var elapsedField = baseType.GetField("elapsedTime", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        if (elapsedField != null)
+        {
+            var value = elapsedField.GetValue(activity);
+            if (value != null)
+            {
+                float elapsed = (float)value;
+                Debug.Log($"[Adapter] ✅ elapsedTime: {elapsed:F2}s");
+                return elapsed;
+            }
+        }
+
+        // Fallback: activityTimeText
+        if (activity.activityTimeText != null && !string.IsNullOrEmpty(activity.activityTimeText.text))
+        {
+            float parsed = ParseTimeFromText(activity.activityTimeText.text);
+            Debug.Log($"[Adapter] ⚠️ Fallback activityTimeText: {parsed:F2}s");
+            return parsed;
+        }
+
+        // Fallback: calcular desde startTime
+        var startTimeField = baseType.GetField("activityStartTime", BindingFlags.NonPublic | BindingFlags.Instance);
+        if (startTimeField != null)
+        {
+            var startValue = startTimeField.GetValue(activity);
+            if (startValue != null)
+            {
+                float calculated = Time.time - (float)startValue;
+                Debug.Log($"[Adapter] ⚠️ Fallback calculado: {calculated:F2}s");
+                return calculated;
+            }
+        }
+
+        Debug.LogWarning("[Adapter] ❌ No se pudo obtener tiempo");
+        return 0f;
+    }
+
     private object GetFieldValue(System.Type type, object instance, string fieldName)
     {
         const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
 
-        // Intentar campo
-        var field = type.GetField(fieldName, flags);
-        if (field != null)
-            return field.GetValue(instance);
+        var currentType = type;
+        while (currentType != null)
+        {
+            var field = currentType.GetField(fieldName, flags);
+            if (field != null)
+                return field.GetValue(instance);
 
-        // Intentar propiedad
-        var prop = type.GetProperty(fieldName, flags);
-        if (prop != null)
-            return prop.GetValue(instance);
+            var prop = currentType.GetProperty(fieldName, flags);
+            if (prop != null)
+                return prop.GetValue(instance);
 
-        Debug.LogWarning($"[Adapter] Campo/propiedad '{fieldName}' no encontrado en {type.Name}");
+            currentType = currentType.BaseType;
+        }
+
+        Debug.LogWarning($"[Adapter] Campo '{fieldName}' no encontrado en {type.Name}");
         return null;
     }
 
     private int ConvertToInt(object value)
     {
         if (value == null) return 0;
-
-        try
-        {
-            return System.Convert.ToInt32(value);
-        }
-        catch
-        {
-            return 0;
-        }
+        try { return System.Convert.ToInt32(value); }
+        catch { return 0; }
     }
 
-    private float ParseTimeFromText(string timeText)
+    private float ParseTimeFromText(string text)
     {
-        if (string.IsNullOrEmpty(timeText)) return 0f;
+        if (string.IsNullOrEmpty(text)) return 0f;
 
-        // Formato esperado: "1:30" o "90" o "1m 30s"
-        timeText = timeText.Trim();
+        string cleaned = text.ToLower()
+            .Replace("tiempo total:", "")
+            .Replace("tiempo:", "")
+            .Replace("s", "")
+            .Replace(" ", "")
+            .Trim();
 
-        // Intentar formato "M:SS"
-        if (timeText.Contains(":"))
+        if (float.TryParse(cleaned, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out float result))
         {
-            var parts = timeText.Split(':');
-            if (parts.Length == 2 &&
-                int.TryParse(parts[0], out int min) &&
-                int.TryParse(parts[1], out int sec))
-            {
-                return min * 60f + sec;
-            }
-        }
-
-        // Intentar formato numérico simple (segundos)
-        if (float.TryParse(timeText.Replace("s", "").Trim(), out float seconds))
-        {
-            return seconds;
+            return result;
         }
 
         return 0f;
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════
-    // SCORING
-    // ═════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CÁLCULO DE SCORE
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private void CalculateScore()
     {
@@ -274,26 +507,28 @@ public class ActivityMetricsAdapter : MonoBehaviour
         switch (scoringConfig.evaluationType)
         {
             case EvaluationType.AccuracyBased:
-                // Score basado en % de aciertos
-                rawScore = _metrics.GetAccuracyPercent();
+                if (_metrics.total > 0)
+                    rawScore = ((float)_metrics.successes / _metrics.total) * 100f;
+                else
+                    rawScore = 100f;
                 break;
 
             case EvaluationType.TimeBased:
-                // Score basado en completar en tiempo ideal
                 if (_metrics.timeSeconds > 0 && scoringConfig.idealTimeSeconds > 0)
                 {
-                    float timeRatio = Mathf.Clamp01(scoringConfig.idealTimeSeconds / _metrics.timeSeconds);
-                    rawScore = timeRatio * 100f;
+                    float timeRatio = scoringConfig.idealTimeSeconds / _metrics.timeSeconds;
+                    rawScore = Mathf.Clamp(timeRatio * 100f, 0f, 100f);
                 }
                 else
                 {
-                    rawScore = 100f; // Si no hay tiempo, score máximo
+                    rawScore = 100f;
                 }
                 break;
 
             case EvaluationType.ComboMetric:
-                // Combo: accuracy + speed + efficiency
-                float accuracyScore = _metrics.GetAccuracyPercent() * scoringConfig.weightAccuracy;
+                float accuracyScore = 0f;
+                if (_metrics.total > 0)
+                    accuracyScore = ((float)_metrics.successes / _metrics.total) * 100f * scoringConfig.weightAccuracy;
 
                 float speedScore = 0f;
                 if (_metrics.timeSeconds > 0 && scoringConfig.idealTimeSeconds > 0)
@@ -311,12 +546,22 @@ public class ActivityMetricsAdapter : MonoBehaviour
 
                 rawScore = accuracyScore + speedScore + efficiencyScore;
                 break;
+
+            case EvaluationType.GuidedActivity:
+                // Siempre perfecto
+                rawScore = 100f;
+                break;
+
+            case EvaluationType.CustomMetrics:
+                // Ya se calculó en HandleCustomMetricsCompletion
+                rawScore = _metrics.score;
+                break;
         }
 
         _metrics.score = Mathf.Clamp(Mathf.RoundToInt(rawScore), 0, 100);
         _metrics.stars = CalculateStars(_metrics.score);
 
-        Debug.Log($"[Adapter] Score calculado: {_metrics.score}/100, Stars: {_metrics.stars}");
+        Debug.Log($"[Adapter] Score: {_metrics.score}/100, Stars: {_metrics.stars}");
     }
 
     private int CalculateStars(int score)
@@ -327,22 +572,17 @@ public class ActivityMetricsAdapter : MonoBehaviour
         return 0;
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     // GUARDADO
-    // ═════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private void SaveResult()
     {
-        // Obtener mensaje dinámico
         string message = GetDynamicMessage();
 
-        // Guardar en el servicio de scoring
         if (ActivityScoringService.Instance != null)
-        {
             ActivityScoringService.Instance.SaveScore(activityId, _metrics, message);
-        }
 
-        // Marcar como completada en el sistema existente
         var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
         int activityIndex = GetActivityIndex();
 
@@ -351,24 +591,15 @@ public class ActivityMetricsAdapter : MonoBehaviour
             CompletionService.MarkActivity(scene, activityIndex);
 
             if (ProgressService.Instance != null)
-            {
                 ProgressService.Instance.CommitMedal(scene, activityIndex);
-            }
         }
     }
 
-    /// <summary>
-    /// Obtiene el mensaje dinámico basado en el config o el mensaje fijo.
-    /// </summary>
     private string GetDynamicMessage()
     {
-        // Si hay config de mensajes, usarlo
         if (summaryConfig != null)
-        {
             return summaryConfig.GetMessage(activityId, _metrics.stars, _metrics.errors);
-        }
 
-        // Fallback al mensaje fijo
         return customMessage;
     }
 
@@ -378,61 +609,40 @@ public class ActivityMetricsAdapter : MonoBehaviour
         return GameManager.Instance.activities.IndexOf(targetActivity);
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
     // PANEL DE RESUMEN
-    // ═════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private void ShowSummaryPanel()
     {
-        Debug.Log("[Adapter] ════════════════════════════════════");
-        Debug.Log("[Adapter] ShowSummaryPanel - INICIADO");
-        Debug.Log("[Adapter] ════════════════════════════════════");
-
-        // Buscar o crear el panel de resumen unificado
         var panel = UnifiedSummaryPanel.Instance;
-
-        Debug.Log($"[Adapter] UnifiedSummaryPanel.Instance: {(panel != null ? "✅ ENCONTRADO" : "❌ NULL")}");
 
         if (panel == null)
         {
-            Debug.LogError("[Adapter] ❌ UnifiedSummaryPanel NO ENCONTRADO en la escena");
-            Debug.LogError("[Adapter] ¿Está el prefab instanciado en el Canvas?");
-
-            // ⚠️ FALLBACK CRÍTICO
+            Debug.LogError("[Adapter] ❌ UnifiedSummaryPanel no encontrado");
             if (targetActivity != null)
-            {
-                Debug.LogWarning("[Adapter] Ejecutando fallback: CompleteActivity()");
                 targetActivity.CompleteActivity();
-            }
             return;
         }
 
-        // ✅ Obtener mensaje dinámico
         string message = GetDynamicMessage();
 
-        Debug.Log("[Adapter] ✅ Panel encontrado, preparando datos...");
-        Debug.Log($"[Adapter] Score: {_metrics.score}/100, Stars: {_metrics.stars}");
-        Debug.Log($"[Adapter] Mensaje: {message}");
-
-        // ✅ Pasar la referencia de la actividad al panel
-        Debug.Log("[Adapter] Llamando panel.Show()...");
+        Debug.Log($"[Adapter] Mostrando panel - Score: {_metrics.score}, Stars: {_metrics.stars}");
         panel.Show(_metrics, activityId, message, targetActivity);
-        Debug.Log("[Adapter] panel.Show() ejecutado");
-
-        Debug.Log("[Adapter] ════════════════════════════════════");
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════
-    // API PÚBLICA (para debugging)
-    // ═════════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════════
+    // API PÚBLICA (Debug)
+    // ═══════════════════════════════════════════════════════════════════════════
 
     public ActivityMetrics GetCurrentMetrics() => _metrics;
+    public ScoringConfig GetScoringConfig() => scoringConfig;
 
     [ContextMenu("Test: Extract Metrics Now")]
     private void TestExtractMetrics()
     {
         ExtractMetrics();
-        Debug.Log($"[Test] Métricas extraídas: {JsonUtility.ToJson(_metrics, true)}");
+        Debug.Log($"[Test] successes={_metrics.successes}, errors={_metrics.errors}, time={_metrics.timeSeconds:F2}s");
     }
 
     [ContextMenu("Test: Calculate Score Now")]
@@ -443,35 +653,31 @@ public class ActivityMetricsAdapter : MonoBehaviour
         Debug.Log($"[Test] Score: {_metrics.score}/100, Stars: {_metrics.stars}");
     }
 
-    [ContextMenu("Test: Get Dynamic Message")]
-    private void TestGetDynamicMessage()
+    [ContextMenu("Activar Modo Calibración")]
+    private void ActivateCalibrationMode()
     {
-        ExtractMetrics();
-        CalculateScore();
-        string msg = GetDynamicMessage();
-        Debug.Log($"[Test] Mensaje dinámico: {msg}");
+#if UNITY_EDITOR
+        calibrationMode = true;
+        EditorUtility.SetDirty(this);
+        Debug.Log("[Adapter] 🎯 Modo calibración ACTIVADO");
+#endif
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CONFIGURACIONES (se muestran en Inspector)
+// CONFIGURACIONES
 // ═══════════════════════════════════════════════════════════════════════════════
 
 [System.Serializable]
 public class MetricsSourceConfig
 {
-    [Header("Campos de la Actividad (usar Reflection)")]
-    [Tooltip("Nombre del campo que contiene aciertos (ej: 'ejerciciosCorrectos', 'scannedCount')")]
+    [Header("Campos de la Actividad (Reflection)")]
     public string successesFieldName = "";
-
-    [Tooltip("Nombre del campo que contiene errores (ej: 'errorCount', 'mistakes')")]
     public string errorsFieldName = "";
-
-    [Tooltip("Nombre del campo que contiene despachos (opcional)")]
     public string dispatchesFieldName = "";
 
     [Header("Total Esperado")]
-    [Tooltip("Total de objetivos esperados (ej: 3 ejercicios, 15 productos). Si es 0, se calcula como successes+errors")]
+    [Tooltip("Si es 0, se calcula como successes + errors")]
     public int expectedTotal = 0;
 }
 
@@ -481,7 +687,7 @@ public class ScoringConfig
     [Header("Tipo de Evaluación")]
     public EvaluationType evaluationType = EvaluationType.AccuracyBased;
 
-    [Header("Pesos (solo para ComboMetric)")]
+    [Header("Pesos (solo ComboMetric)")]
     [Range(0f, 1f)] public float weightAccuracy = 0.5f;
     [Range(0f, 1f)] public float weightSpeed = 0.3f;
     [Range(0f, 1f)] public float weightEfficiency = 0.2f;
@@ -491,19 +697,21 @@ public class ScoringConfig
     [Range(0, 100)] public int star2Threshold = 75;
     [Range(0, 100)] public int star3Threshold = 90;
 
-    [Header("Referencias (para cálculos)")]
-    [Tooltip("Tiempo ideal en segundos (para TimeBased o ComboMetric)")]
+    [Header("Referencias")]
+    [Tooltip("Tiempo ideal (para TimeBased/ComboMetric/CustomMetrics)")]
     public float idealTimeSeconds = 60f;
 
-    [Tooltip("Máximo de errores permitidos antes de penalización completa")]
+    [Tooltip("Máximo errores permitidos antes de penalización completa")]
     public int maxAllowedErrors = 3;
 }
 
 public enum EvaluationType
 {
-    AccuracyBased,   // Solo % de aciertos
-    TimeBased,       // Solo velocidad
-    ComboMetric      // Combinación de accuracy + speed + efficiency
+    AccuracyBased,    // Solo precisión (errores)
+    TimeBased,        // Solo velocidad
+    ComboMetric,      // Combinación
+    GuidedActivity,   // Sin métricas, siempre 100%
+    CustomMetrics     // La actividad pasa sus métricas
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -6,35 +6,20 @@ using TMPro;
 using DG.Tweening;
 
 /// <summary>
-/// Clase base para actividades de Línea de Cajas (LC) que comparten flujos comunes:
-/// - Spawn de cliente → checkout → escaneo de productos → subtotal → pago → ticket → exit
-/// 
-/// SCRIPTS QUE PUEDEN HEREDAR DE ESTA CLASE:
-/// ─────────────────────────────────────────
-/// ✅ CashPaymentActivity      - Pago en efectivo
-/// ✅ CardPaymentActivity      - Pago con tarjeta
-/// ✅ OmonelCardPaymentActivity - Pago con tarjeta Omonel
-/// ✅ RoundUpCentsActivity     - Redondeo de centavos
-/// ✅ RedeemPointsActivity     - Canje de puntos
-/// ✅ AngryClientVelocity      - Cliente molesto (velocidad)
-/// 
-/// ═══════════════════════════════════════════════════════════════════════════════
-/// INTEGRACIÓN CON UnifiedSummaryPanel (Sistema de 3 Estrellas)
-/// ═══════════════════════════════════════════════════════════════════════════════
-/// Para usar el sistema de 3 estrellas:
-/// 1. Agregar ActivityMetricsAdapter como componente al GameObject
-/// 2. En el ActivityComplete(), llamar adapter.NotifyActivityCompleted()
-/// 3. El adapter extrae métricas, calcula score y muestra el panel
+/// LCPaymentActivityBase OPTIMIZADO
+/// - Removido GameObject.Find() de SetupTimer()
+/// - Precarga de AudioClips para evitar spike
+/// - Uso de cache de componentes del CustomerSpawner
 /// </summary>
 public abstract class LCPaymentActivityBase : ActivityBase
 {
     // ══════════════════════════════════════════════════════════════════════════════
-    // CONFIGURACIÓN COMÚN (antes duplicada en cada actividad)
+    // CONFIGURACIÓN COMÚN
     // ══════════════════════════════════════════════════════════════════════════════
 
     [Header("LC Base - Timer")]
     [SerializeField] protected TextMeshProUGUI liveTimerText;
-    [SerializeField] protected TextMeshProUGUI successTimeText;
+    //[SerializeField] protected TextMeshProUGUI successTimeText;
 
     [Header("LC Base - Productos")]
     [SerializeField] protected Transform spawnPoint;
@@ -58,11 +43,8 @@ public abstract class LCPaymentActivityBase : ActivityBase
     [SerializeField] protected Transform ticketSpawnPoint;
     [SerializeField] protected Transform ticketTargetPoint;
 
-    [Header("LC Base - Panel Success")]
-    [SerializeField] protected Button continueButton;
-
     // ══════════════════════════════════════════════════════════════════════════════
-    // ESTADO COMÚN (antes duplicado en cada actividad)
+    // ESTADO COMÚN
     // ══════════════════════════════════════════════════════════════════════════════
 
     protected GameObject currentProduct;
@@ -75,35 +57,25 @@ public abstract class LCPaymentActivityBase : ActivityBase
     protected int maxAttempts = 3;
 
     // ══════════════════════════════════════════════════════════════════════════════
-    // CONFIGURACIÓN ABSTRACTA (cada actividad define)
+    // CONFIGURACIÓN ABSTRACTA
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>Posición de cámara al iniciar (ej: "Iniciando Juego")</summary>
     protected abstract string GetStartCameraPosition();
-
-    /// <summary>Posición de cámara para subtotal (ej: "Actividad Billete SubTotal")</summary>
     protected abstract string GetSubtotalCameraPosition();
-
-    /// <summary>Posición de cámara para success (ej: "Actividad Billete Success")</summary>
     protected abstract string GetSuccessCameraPosition();
-
-    /// <summary>ID de la actividad para comandos (ej: "Day2_PagoEfectivo")</summary>
     protected abstract string GetActivityCommandId();
 
     // ══════════════════════════════════════════════════════════════════════════════
-    // HOOKS VIRTUALES (las hijas pueden sobrescribir si necesitan)
+    // HOOKS VIRTUALES
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>Llamado después de que el cliente llega al checkout</summary>
     protected virtual void OnCustomerReady() { }
 
-    /// <summary>Llamado después de escanear todos los productos</summary>
     protected virtual void OnAllProductsScanned()
     {
         MoveToSubtotalPhase();
     }
 
-    /// <summary>Llamado cuando se debe reiniciar el intento</summary>
     protected virtual void OnRestartAttempt()
     {
         ResetValues();
@@ -111,71 +83,77 @@ public abstract class LCPaymentActivityBase : ActivityBase
         StartNewAttempt();
     }
 
-    /// <summary>Llamado cuando se completan todos los intentos</summary>
     protected virtual void OnAllAttemptsComplete()
     {
         ShowActivityComplete();
     }
 
-    /// <summary>Llamado antes de spawnear el producto (para modificaciones)</summary>
     protected virtual void OnBeforeProductSpawn() { }
-
-    /// <summary>Llamado después de spawnear el producto (para EnsureProductData, etc.)</summary>
     protected virtual void OnAfterProductSpawn(GameObject product) { }
 
     // ══════════════════════════════════════════════════════════════════════════════
-    // INICIALIZACIÓN (StartActivity común)
+    // LIFECYCLE - PRECARGA DE AUDIO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Precarga el AudioClip de la actividad para evitar spike al iniciar competencia.
+    /// Las hijas pueden sobrescribir para precargar clips adicionales.
+    /// </summary>
+    protected override void Awake()
+    {
+        base.Awake();
+        PreloadAudioClips();
+    }
+
+    /// <summary>
+    /// Precarga clips de audio para evitar spikes de carga.
+    /// </summary>
+    protected virtual void PreloadAudioClips()
+    {
+        // Precargar música de actividad
+        if (activityMusicClip != null)
+        {
+            // LoadAudioData() carga los datos en memoria de forma síncrona
+            // pero al hacerlo en Awake, el spike ocurre durante la carga de escena
+            // en vez de durante el gameplay
+            if (activityMusicClip.loadState == AudioDataLoadState.Unloaded)
+            {
+                activityMusicClip.LoadAudioData();
+            }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN
     // ══════════════════════════════════════════════════════════════════════════════
 
     public override void StartActivity()
     {
         base.StartActivity();
 
-        // Configurar scanner
-        SetupScanner();
+        // ✅ FIX M-11: Resetear intentos al iniciar actividad
+        currentAttempt = 0;
 
-        // Configurar timer (busca automáticamente si no está asignado)
+        SetupScanner();
         SetupTimer();
 
-        // Obtener nombres de productos del pool
         productNames = ObjectPoolManager.Instance.GetAvailablePrefabNames(PoolTag.Producto).ToArray();
 
-        // Configurar timer text para ActivityBase
         activityTimerText = liveTimerText;
-        activityTimeText = successTimeText;
+        //activityTimeText = successTimeText;
 
-        // Inicializar comandos específicos de la actividad hija
         InitializeCommands();
-
-        // Hook para inicialización adicional de la hija
         OnActivityInitialize();
-
-        // ⚠️ IMPORTANTE: La base NO llama UpdateInstructionOnce aquí
-        // Cada actividad tiene diferentes índices de instrucción
-        // La hija debe llamar a ShowInitialInstruction() que internamente 
-        // decide qué instrucción mostrar y cuándo llamar a StartNewAttempt
         ShowInitialInstruction();
     }
 
-    /// <summary>
-    /// Hook para mostrar la instrucción inicial. Las hijas DEBEN sobrescribir
-    /// para llamar UpdateInstructionOnce con su índice correcto.
-    /// Por defecto llama a StartNewAttempt directamente.
-    /// </summary>
     protected virtual void ShowInitialInstruction()
     {
-        // Default: ir directo a StartNewAttempt
-        // Las hijas sobrescriben: UpdateInstructionOnce(0, StartNewAttempt);
         StartNewAttempt();
     }
 
-    /// <summary>Hook para inicialización adicional en clases hijas</summary>
     protected virtual void OnActivityInitialize() { }
 
-    /// <summary>
-    /// Inicializa los comandos de la actividad.
-    /// Las hijas sobrescriben para agregar sus comandos específicos.
-    /// </summary>
     protected override void InitializeCommands() { }
 
     protected virtual void SetupScanner()
@@ -189,62 +167,29 @@ public abstract class LCPaymentActivityBase : ActivityBase
     }
 
     /// <summary>
-    /// Configura el timer de la actividad.
-    /// Si liveTimerText no está asignado, intenta buscarlo por nombre.
+    /// Configura el timer. 
+    /// ⚠️ OPTIMIZADO: Ya NO usa GameObject.Find()
+    /// Asigna liveTimerText desde el Inspector.
     /// </summary>
     protected virtual void SetupTimer()
     {
-        // Si ya está asignado, solo vincular
         if (liveTimerText != null)
         {
             activityTimerText = liveTimerText;
-            liveTimerText.gameObject.SetActive(false); // Oculto hasta StartCompetition
-            return;
+            liveTimerText.gameObject.SetActive(false);
         }
-
-        // Intentar buscar por nombre común
-        string[] possibleNames = { "LiveTimerText", "TimerText", "ActivityTimer", "Timer" };
-
-        foreach (string timerName in possibleNames)
+        else
         {
-            var found = GameObject.Find(timerName);
-            if (found != null)
-            {
-                liveTimerText = found.GetComponent<TextMeshProUGUI>();
-                if (liveTimerText != null)
-                {
-                    activityTimerText = liveTimerText;
-                    liveTimerText.gameObject.SetActive(false);
-                    Debug.Log($"[{GetType().Name}] Timer encontrado automáticamente: {timerName}");
-                    return;
-                }
-            }
+            Debug.LogWarning($"[{GetType().Name}] liveTimerText no asignado. Asígnalo en el Inspector.");
         }
-
-        // Si no se encontró, buscar por tag
-        var timerByTag = GameObject.FindWithTag("ActivityTimer");
-        if (timerByTag != null)
-        {
-            liveTimerText = timerByTag.GetComponent<TextMeshProUGUI>();
-            if (liveTimerText != null)
-            {
-                activityTimerText = liveTimerText;
-                liveTimerText.gameObject.SetActive(false);
-                Debug.Log($"[{GetType().Name}] Timer encontrado por tag: ActivityTimer");
-                return;
-            }
-        }
-
-        Debug.LogWarning($"[{GetType().Name}] No se encontró liveTimerText. El timer no se mostrará.");
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
-    // FLUJO PRINCIPAL: Cliente → Checkout → Productos → Subtotal
+    // FLUJO PRINCIPAL (OPTIMIZADO)
     // ══════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Inicia un nuevo intento: spawna cliente y lo mueve al checkout.
-    /// Antes estaba duplicado en ~8 actividades.
+    /// Inicia un nuevo intento con cliente cacheado.
     /// </summary>
     protected virtual void StartNewAttempt()
     {
@@ -252,8 +197,19 @@ public abstract class LCPaymentActivityBase : ActivityBase
 
         // Spawnear cliente
         currentCustomer = customerSpawner.SpawnCustomer();
-        currentCustomerMovement = currentCustomer.GetComponent<CustomerMovement>();
-        currentClient = currentCustomer.GetComponent<Client>();
+
+        // ✅ OPTIMIZADO: Usar cache del spawner en vez de GetComponent
+        if (customerSpawner.TryGetCachedComponents(currentCustomer, out var movement, out var client))
+        {
+            currentCustomerMovement = movement;
+            currentClient = client;
+        }
+        else
+        {
+            // Fallback si el cache falla
+            currentCustomerMovement = currentCustomer.GetComponent<CustomerMovement>();
+            currentClient = currentCustomer.GetComponent<Client>();
+        }
 
         // Mover cámara y cliente
         cameraController.MoveToPosition(GetStartCameraPosition(), () =>
@@ -266,10 +222,6 @@ public abstract class LCPaymentActivityBase : ActivityBase
         });
     }
 
-    /// <summary>
-    /// Spawna el siguiente producto y lo bindea para escaneo.
-    /// Antes estaba duplicado en ~8 actividades.
-    /// </summary>
     protected virtual void SpawnAndBindProduct()
     {
         OnBeforeProductSpawn();
@@ -283,10 +235,6 @@ public abstract class LCPaymentActivityBase : ActivityBase
         }
     }
 
-    /// <summary>
-    /// Bindea el producto actual (currentProduct) para escaneo.
-    /// Versión sin parámetro para compatibilidad con actividades existentes.
-    /// </summary>
     protected virtual void BindCurrentProduct()
     {
         if (currentProduct != null)
@@ -295,10 +243,6 @@ public abstract class LCPaymentActivityBase : ActivityBase
         }
     }
 
-    /// <summary>
-    /// Bindea un producto específico para escaneo.
-    /// Registra eventos de escaneo.
-    /// </summary>
     protected virtual void BindCurrentProduct(GameObject product)
     {
         if (product == null) return;
@@ -306,45 +250,30 @@ public abstract class LCPaymentActivityBase : ActivityBase
         var drag = product.GetComponent<DragObject>();
         if (drag != null)
         {
-            // Usar OnScanned (el evento correcto en DragObject)
             drag.OnScanned -= OnProductScannedHandler;
             drag.OnScanned += OnProductScannedHandler;
         }
     }
 
-    /// <summary>
-    /// Handler interno para el evento OnScanned de DragObject.
-    /// </summary>
     private void OnProductScannedHandler(DragObject dragObj)
     {
         if (dragObj == null) return;
 
-        // Desuscribirse para evitar duplicados
         dragObj.OnScanned -= OnProductScannedHandler;
 
-        // Registrar en el scanner si existe
         if (scanner != null)
         {
             scanner.RegisterProductScan(dragObj);
         }
 
-        // Llamar al método virtual que las hijas pueden sobrescribir
         RegisterProductScanned();
     }
 
-    /// <summary>
-    /// Método virtual llamado cuando un producto es escaneado.
-    /// Las hijas pueden sobrescribir para lógica personalizada.
-    /// Por defecto: incrementa contador, devuelve al pool, spawna siguiente o finaliza.
-    /// </summary>
     protected virtual void RegisterProductScanned()
     {
         scannedCount++;
-
-        // Devolver producto al pool
         ReturnCurrentProductToPool();
 
-        // Verificar si hay más productos
         if (scannedCount < productsToScan)
         {
             SpawnAndBindProduct();
@@ -355,10 +284,6 @@ public abstract class LCPaymentActivityBase : ActivityBase
         }
     }
 
-    /// <summary>
-    /// Devuelve el producto actual al pool.
-    /// Método extraído para que las hijas puedan llamarlo directamente.
-    /// </summary>
     protected virtual void ReturnCurrentProductToPool()
     {
         if (currentProduct == null) return;
@@ -372,24 +297,12 @@ public abstract class LCPaymentActivityBase : ActivityBase
         currentProduct = null;
     }
 
-    /// <summary>
-    /// Callback cuando un producto es escaneado (versión con DragObject).
-    /// Las hijas pueden sobrescribir para lógica adicional con acceso al DragObject.
-    /// </summary>
-    protected virtual void OnProductScanned(DragObject dragObj)
-    {
-        // Por defecto no hace nada extra, RegisterProductScanned() maneja todo
-        // Las hijas pueden sobrescribir si necesitan acceso al DragObject
-    }
+    protected virtual void OnProductScanned(DragObject dragObj) { }
 
-    /// <summary>
-    /// Mueve a la fase de subtotal.
-    /// </summary>
     protected virtual void MoveToSubtotalPhase()
     {
         cameraController.MoveToPosition(GetSubtotalCameraPosition(), () =>
         {
-            // Activar botones de subtotal
             foreach (var button in subtotalButtons)
             {
                 button.interactable = true;
@@ -400,15 +313,8 @@ public abstract class LCPaymentActivityBase : ActivityBase
         });
     }
 
-    /// <summary>
-    /// Hook para cuando la fase de subtotal está lista.
-    /// Las hijas sobrescriben para llamar UpdateInstructionOnce con su índice.
-    /// </summary>
     protected virtual void OnSubtotalPhaseReady() { }
 
-    /// <summary>
-    /// Maneja el botón de Subtotal. Las hijas sobrescriben para lógica específica.
-    /// </summary>
     public virtual void HandleSubTotal()
     {
         float totalAmount = GetTotalAmount(activityTotalPriceText);
@@ -423,17 +329,12 @@ public abstract class LCPaymentActivityBase : ActivityBase
         OnSubtotalPressed(totalAmount);
     }
 
-    /// <summary>Hook llamado después de presionar subtotal con el monto total</summary>
     protected virtual void OnSubtotalPressed(float totalAmount) { }
 
     // ══════════════════════════════════════════════════════════════════════════════
-    // INPUT DE MONTO (compartido por efectivo, tarjeta, etc.)
+    // INPUT DE MONTO
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Activa el input de monto con los botones numéricos.
-    /// Antes estaba duplicado en ~6 actividades.
-    /// </summary>
     protected virtual void ActivateAmountInput(float amount, Action onInputComplete = null)
     {
         if (amountInputField != null)
@@ -455,10 +356,6 @@ public abstract class LCPaymentActivityBase : ActivityBase
         ActivateButtonWithSequence(selectedButtons, 0, () => onInputComplete?.Invoke());
     }
 
-    /// <summary>
-    /// Callback para botones numéricos.
-    /// Antes estaba duplicado EXACTAMENTE IGUAL en ~6 actividades.
-    /// </summary>
     public virtual void OnNumberButtonPressed(string number)
     {
         if (amountInputField != null)
@@ -471,9 +368,6 @@ public abstract class LCPaymentActivityBase : ActivityBase
     // TICKET Y FINALIZACIÓN
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Genera el ticket y maneja la entrega.
-    /// </summary>
     protected virtual void SpawnTicket(Action onDelivered = null)
     {
         InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, () =>
@@ -483,19 +377,13 @@ public abstract class LCPaymentActivityBase : ActivityBase
         });
     }
 
-    /// <summary>
-    /// Maneja la entrega del ticket: sonido, cliente sale, decide si reiniciar o completar.
-    /// Antes estaba duplicado en ~6 actividades.
-    /// </summary>
     protected virtual void HandleTicketDelivered()
     {
         SoundManager.Instance.PlaySound("success");
         currentAttempt++;
 
-        // Cliente sale
         currentCustomerMovement?.MoveToExit();
 
-        // Decidir siguiente paso
         if (currentAttempt < maxAttempts)
         {
             OnRestartAttempt();
@@ -506,36 +394,22 @@ public abstract class LCPaymentActivityBase : ActivityBase
         }
     }
 
-    /// <summary>
-    /// Muestra el panel de resumen unificado (sistema de 3 estrellas).
-    /// 
-    /// REQUIERE: 
-    /// - ActivityMetricsAdapter como componente en el GameObject
-    /// - UnifiedSummaryPanel en la escena
-    /// 
-    /// Si no hay adapter, se lanza advertencia y se llama CompleteActivity() directamente.
-    /// </summary>
     protected virtual void ShowActivityComplete()
     {
         StopActivityTimer();
         ResetValues();
         commandManager.commandList.Clear();
 
-        // Restaurar música antes de mostrar el panel
         SoundManager.Instance.RestorePreviousMusic();
 
-        // Usar el sistema de 3 estrellas
         var adapter = GetComponent<ActivityMetricsAdapter>();
         if (adapter != null)
         {
             adapter.NotifyActivityCompleted();
-            // El adapter mostrará el panel y llamará CompleteActivity() cuando el usuario presione "Continuar"
         }
         else
         {
-            // Sin adapter = sin panel de estrellas
-            Debug.LogWarning($"[{GetType().Name}] No hay ActivityMetricsAdapter. " +
-                           "Agrega el componente para usar UnifiedSummaryPanel.");
+            Debug.LogWarning($"[{GetType().Name}] No hay ActivityMetricsAdapter.");
             SoundManager.Instance.PlaySound("win");
             CompleteActivity();
         }
@@ -545,10 +419,6 @@ public abstract class LCPaymentActivityBase : ActivityBase
     // RESET Y LIMPIEZA
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Resetea los valores para un nuevo intento.
-    /// Antes estaba duplicado con variaciones menores en ~8 actividades.
-    /// </summary>
     protected virtual void ResetValues()
     {
         scannedCount = 0;
@@ -567,17 +437,13 @@ public abstract class LCPaymentActivityBase : ActivityBase
     }
 
     /// <summary>
-    /// Inicia la fase de competencia con música y timer.
-    /// Antes estaba duplicado en ~5 actividades.
-    /// 
-    /// IMPORTANTE: Usa restartIfSame = true para reiniciar la música entre intentos.
-    /// Esto evita que la música se "pegue" en el mismo punto cuando se repiten intentos.
+    /// Inicia la competencia con música y timer.
+    /// ✅ El AudioClip ya está precargado desde Awake()
     /// </summary>
     protected virtual void StartCompetition()
     {
         if (activityMusicClip != null)
         {
-            // ✅ FIX: restartIfSame = true para reiniciar música entre intentos
             SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, true);
         }
 
@@ -601,10 +467,6 @@ public abstract class LCPaymentActivityBase : ActivityBase
     // UTILIDADES
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Asegura que el producto tenga ProductData (útil para productos del pool sin datos).
-    /// Movido aquí porque se usa en varias actividades.
-    /// </summary>
     protected void EnsureProductData(GameObject go)
     {
         if (go == null) return;
@@ -625,17 +487,10 @@ public abstract class LCPaymentActivityBase : ActivityBase
         }
     }
 
-    /// <summary>
-    /// Obtiene el total como float para cálculos.
-    /// </summary>
     public float GetTotalAmountForDisplay()
     {
         return GetTotalAmount(activityTotalPriceText);
     }
 
-    /// <summary>
-    /// Initialize vacío por defecto (requerido por ActivityBase).
-    /// Las hijas pueden sobrescribir si necesitan.
-    /// </summary>
     protected override void Initialize() { }
 }

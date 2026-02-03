@@ -97,6 +97,8 @@ public class UnifiedSummaryPanel : MonoBehaviour
     {
         if (Instance == this)
             Instance = null;
+
+        KillAllTweens();
     }
 
     // ═════════════════════════════════════════════════════════════════════════════
@@ -414,12 +416,48 @@ public class UnifiedSummaryPanel : MonoBehaviour
 
     private void OnRetryClicked()
     {
-        Hide();
+        // Matar todos los tweens del panel antes de cambiar escena
+        KillAllTweens();
 
-        // Reiniciar la actividad actual (recargar la escena)
+        // Reiniciar la actividad actual
         UnityEngine.SceneManagement.SceneManager.LoadScene(
             UnityEngine.SceneManagement.SceneManager.GetActiveScene().name
         );
+    }
+
+    private void OnMenuClicked()
+    {
+        // Matar todos los tweens del panel antes de cambiar escena
+        KillAllTweens();
+
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.ReturnToMenu();
+        }
+        else
+        {
+            LoadingScreen.LoadScene("Menu");
+        }
+    }
+
+    /// <summary>
+    /// Mata todos los tweens activos del panel para evitar errores al destruir objetos.
+    /// </summary>
+    private void KillAllTweens()
+    {
+        // Matar tween del CanvasGroup
+        if (canvasGroup != null)
+            canvasGroup.DOKill();
+
+        // Matar tweens de las estrellas
+        foreach (var star in starImages)
+        {
+            if (star != null)
+                star.transform.DOKill();
+        }
+
+        // Matar cualquier DOVirtual.DelayedCall pendiente
+        DOTween.Kill(this);
     }
 
     private void OnContinueClicked()
@@ -445,22 +483,6 @@ public class UnifiedSummaryPanel : MonoBehaviour
             {
                 LoadingScreen.LoadScene("Menu");
             }
-        }
-    }
-
-    private void OnMenuClicked()
-    {
-        Hide();
-
-        // Volver al menú usando el GameManager
-        if (GameManager.Instance != null)
-        {
-            GameManager.Instance.ReturnToMenu();
-        }
-        else
-        {
-            // Fallback: cargar escena de menú directamente
-            LoadingScreen.LoadScene("Menu");
         }
     }
 }

@@ -117,7 +117,7 @@ public class ObjectPoolManager : MonoBehaviour
             }
         }
 
-        Debug.LogWarning($"❌ No matching pool found to return: {obj.name}");
+        Debug.LogWarning($"No matching pool found to return: {obj.name}");
     }
 
     public List<string> GetAvailablePrefabNames(PoolTag tag)

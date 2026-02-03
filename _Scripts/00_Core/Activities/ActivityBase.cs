@@ -6,7 +6,7 @@ using UnityEngine.UI;
 using DG.Tweening;
 using System.Collections;
 
-public abstract class ActivityBase: MonoBehaviour
+public abstract class ActivityBase : MonoBehaviour
 {
     [Header("Configuración de Música")]
     public AudioClip activityMusicClip;
@@ -221,13 +221,15 @@ public abstract class ActivityBase: MonoBehaviour
         }
 
         buttons[index].transform.DOScale(Vector3.one * 3f, 0.3f).SetEase(Ease.OutBack)
+            .SetLink(buttons[index].gameObject)
             .OnComplete(() =>
             {
                 buttons[index].onClick.RemoveAllListeners();
                 buttons[index].onClick.AddListener(() =>
                 {
                     Debug.Log("Se presionó el botón: " + buttons[index].name);
-                    buttons[index].transform.DOScale(Vector3.one, 0.3f).SetEase(Ease.InBack);
+                    buttons[index].transform.DOScale(Vector3.one, 0.3f).SetEase(Ease.InBack)
+                        .SetLink(buttons[index].gameObject);
                     buttons[index].interactable = false;
 
                     if (index + 1 < buttons.Count)
@@ -333,16 +335,18 @@ public abstract class ActivityBase: MonoBehaviour
         }
 
         buttons[index].gameObject.SetActive(true);
-        buttons[index].interactable = false; 
+        buttons[index].interactable = false;
 
         buttons[index].transform.DOScale(Vector3.one * 3f, 0.3f).SetEase(Ease.OutBack)
+            .SetLink(buttons[index].gameObject)
             .OnComplete(() =>
             {
                 buttons[index].interactable = true;
                 buttons[index].onClick.RemoveAllListeners();
                 buttons[index].onClick.AddListener(() =>
                 {
-                    buttons[index].transform.DOScale(Vector3.one, 0.3f).SetEase(Ease.InBack);
+                    buttons[index].transform.DOScale(Vector3.one, 0.3f).SetEase(Ease.InBack)
+                        .SetLink(buttons[index].gameObject);
                     buttons[index].interactable = false;
                     buttons[index].gameObject.SetActive(false);
 
@@ -365,6 +369,7 @@ public abstract class ActivityBase: MonoBehaviour
         buttons[index].gameObject.SetActive(true);
 
         buttons[index].transform.DOScale(Vector3.one * 3f, 0.1f).SetEase(Ease.OutBack)
+            .SetLink(buttons[index].gameObject)
             .OnComplete(() =>
             {
                 buttons[index].interactable = true;
@@ -375,6 +380,7 @@ public abstract class ActivityBase: MonoBehaviour
                     Debug.Log("Se presionó el botón: " + buttons[index].name);
 
                     buttons[index].transform.DOScale(Vector3.zero, 0.3f).SetEase(Ease.InBack)
+                        .SetLink(buttons[index].gameObject)
                         .OnComplete(() =>
                         {
                             buttons[index].gameObject.SetActive(false);
@@ -592,7 +598,7 @@ public abstract class ActivityBase: MonoBehaviour
         var cg = panel.GetComponent<CanvasGroup>();
         if (cg != null) cg.alpha = 0f;
 
-        Sequence seq = DOTween.Sequence();
+        Sequence seq = DOTween.Sequence().SetLink(panel);
         seq.Append(panel.transform.DOScale(1f, 0.5f).SetEase(Ease.OutBack));
         if (cg != null) seq.Join(cg.DOFade(1f, 0.5f));
     }
@@ -600,7 +606,7 @@ public abstract class ActivityBase: MonoBehaviour
     public void OcultarPanel(GameObject panel, Action onComplete = null)
     {
         var cg = panel.GetComponent<CanvasGroup>();
-        Sequence seq = DOTween.Sequence();
+        Sequence seq = DOTween.Sequence().SetLink(panel);
         seq.Append(panel.transform.DOScale(0f, 0.4f).SetEase(Ease.InBack));
         if (cg != null) seq.Join(cg.DOFade(0f, 0.4f));
         seq.OnComplete(() => {
@@ -627,8 +633,8 @@ public abstract class ActivityBase: MonoBehaviour
         cg.alpha = 0f;
         go.transform.localScale = Vector3.one * 0.8f;
 
-        cg.DOFade(1f, duration).SetEase(Ease.OutQuad);
-        go.transform.DOScale(1f, duration).SetEase(Ease.OutBack);
+        cg.DOFade(1f, duration).SetEase(Ease.OutQuad).SetLink(go);
+        go.transform.DOScale(1f, duration).SetEase(Ease.OutBack).SetLink(go);
     }
 
     public void HideCanvas(GameObject go, float duration = 0.3f)
@@ -640,8 +646,8 @@ public abstract class ActivityBase: MonoBehaviour
             return;
         }
 
-        cg.DOFade(0f, duration).SetEase(Ease.InSine);
-        go.transform.DOScale(0.8f, duration).SetEase(Ease.InBack).OnComplete(() =>
+        cg.DOFade(0f, duration).SetEase(Ease.InSine).SetLink(go);
+        go.transform.DOScale(0.8f, duration).SetEase(Ease.InBack).SetLink(go).OnComplete(() =>
         {
             go.SetActive(false);
         });

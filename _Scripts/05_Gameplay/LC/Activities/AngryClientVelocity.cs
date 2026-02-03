@@ -5,20 +5,36 @@ using UnityEngine.UI;
 using TMPro;
 
 /// <summary>
-/// Actividad de Cliente Molesto (Velocidad) - MIGRADA a LCPaymentActivityBase
+/// AngryClientVelocity - Actividad de Cliente Molesto (Velocidad)
 /// 
-/// ANTES: ~450 líneas
-/// DESPUÉS: ~380 líneas
-/// REDUCCIÓN: ~16% (menos que otras porque tiene mucha lógica específica del reto)
-/// 
-/// Flujo especial:
+/// FLUJO:
 /// 1. Escanear 3 productos iniciales
 /// 2. Cliente se queja → Diálogo con opciones
 /// 3. Reto cronometrado: escanear N productos en M segundos
 /// 4. Si falla: panel de retry
 /// 5. Si pasa: subtotal → pago con tarjeta → ticket
 /// 
-/// Flujo de instrucciones:
+/// TIPO DE EVALUACIÓN: ComboMetric
+/// - Precisión: Respuestas correctas en diálogos + retos completados
+/// - Velocidad: Tiempo total de la actividad (elapsedTime, corre internamente)
+/// - Eficiencia: Penalización por errores
+/// 
+/// TIMERS:
+/// - patienceSlider: Barra de paciencia del cliente (VISIBLE, baja durante el reto)
+/// - elapsedTime (ActivityBase): Tiempo total interno (INVISIBLE, para el Adapter)
+/// 
+/// CONFIGURACIÓN DEL ADAPTER:
+/// - evaluationType: ComboMetric
+/// - errorsFieldName: "_errorCount"
+/// - successesFieldName: "_successCount"
+/// - expectedTotal: 0
+/// - idealTimeSeconds: 120
+/// - maxAllowedErrors: 3
+/// - weightAccuracy: 0.5
+/// - weightSpeed: 0.3
+/// - weightEfficiency: 0.2
+/// 
+/// INSTRUCCIONES:
 /// 0 = Inicio
 /// 1 = Diálogo cliente molesto
 /// 2 = Inicio del reto cronometrado
@@ -31,28 +47,52 @@ using TMPro;
 public class AngryClientVelocity : LCPaymentActivityBase
 {
     // ══════════════════════════════════════════════════════════════════════════════
-    // CONFIGURACIÓN ESPECÍFICA DE ANGRY VELOCITY
+    // CONFIGURACIÓN - UI DEL RETO
     // ══════════════════════════════════════════════════════════════════════════════
 
     [Header("AngryVelocity - UI del Reto")]
     [SerializeField] private TextMeshProUGUI scannedCountText;
-    [SerializeField] private TextMeshProUGUI remainingTimeText;
-    [SerializeField] private GameObject failPanel;
-    [SerializeField] private Button retryButton;
+    [SerializeField] private Slider patienceSlider;
+    [SerializeField] private Image patienceSliderFill;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - BOTONES ESPECÍFICOS
+    // ══════════════════════════════════════════════════════════════════════════════
 
     [Header("AngryVelocity - Botones Específicos")]
     [SerializeField] private List<Button> commandCardButtons;
     [SerializeField] private List<Button> enterButtons;
     [SerializeField] private List<Button> enterLastClicking;
 
-    // Estado del reto
-    private Client currentClientComponent;
-    private int totalToScan;
-    private float currentTime;
-    private float maxTime;
-    private bool timerActive = false;
-    private bool challengeStarted = false;
-    private Coroutine challengeTimerCoroutine;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ESTADO DEL RETO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private Client _currentClientComponent;
+    private int _totalToScan;
+    private float _currentTime;
+    private float _maxTime;
+    private bool _timerActive = false;
+    private bool _challengeStarted = false;
+    private Coroutine _challengeTimerCoroutine;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS - LEÍDAS POR ADAPTER VÍA REFLECTION
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Contador de errores:
+    /// - Respuesta incorrecta al diálogo
+    /// - Fallar el reto de tiempo
+    /// </summary>
+    private int _errorCount = 0;
+
+    /// <summary>
+    /// Contador de aciertos:
+    /// - Respuesta correcta al diálogo
+    /// - Completar el reto de tiempo
+    /// </summary>
+    private int _successCount = 0;
 
     // ══════════════════════════════════════════════════════════════════════════════
     // IMPLEMENTACIÓN DE MÉTODOS ABSTRACTOS
@@ -83,8 +123,12 @@ public class AngryClientVelocity : LCPaymentActivityBase
 
     protected override void OnActivityInitialize()
     {
+        // Resetear métricas
+        ResetMetrics();
+
         // Registrar diálogos de cliente molesto
-        RegisterAngryVelocityDialogs();
+        // Cargar 4 preguntas aleatorias de la categoría "impatient"
+        DialogPoolLoader.RegisterInDialogSystem("impatient", 4);
 
         // Desactivar botones específicos
         foreach (var button in commandCardButtons)
@@ -96,8 +140,13 @@ public class AngryClientVelocity : LCPaymentActivityBase
 
         // Ocultar UI del reto
         if (scannedCountText != null) scannedCountText.enabled = false;
-        if (remainingTimeText != null) remainingTimeText.enabled = false;
-        if (failPanel != null) failPanel.SetActive(false);
+        if (patienceSlider != null) patienceSlider.gameObject.SetActive(false);
+
+        // ⚠️ IMPORTANTE: Ocultar el timer de LCPaymentActivityBase
+        // Solo mostraremos el timer del reto (remainingTimeText)
+        // El elapsedTime de ActivityBase corre internamente para el Adapter
+        if (liveTimerText != null)
+            liveTimerText.gameObject.SetActive(false);
     }
 
     protected override void InitializeCommands()
@@ -127,21 +176,64 @@ public class AngryClientVelocity : LCPaymentActivityBase
         });
     }
 
+    /// <summary>
+    /// Override de StartCompetition: inicia timer INTERNO sin mostrar UI.
+    /// El usuario solo ve el countdown del reto (remainingTimeText).
+    /// </summary>
+    protected override void StartCompetition()
+    {
+        // Iniciar música
+        if (activityMusicClip != null)
+        {
+            SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, true);
+        }
+
+        // En modo práctica, mostrar el timer general
+        if (liveTimerText != null)
+            liveTimerText.gameObject.SetActive(true);
+
+        // Iniciar timer (visible en práctica, interno en normal)
+        StartActivityTimer();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private void ResetMetrics()
+    {
+        _errorCount = 0;
+        _successCount = 0;
+    }
+
+    private void RegisterError()
+    {
+        _errorCount++;
+        SoundManager.Instance.PlaySound("error");
+        Debug.Log($"[AngryClientVelocity] Error registrado. Total: {_errorCount}");
+    }
+
+    private void RegisterSuccess()
+    {
+        _successCount++;
+        Debug.Log($"[AngryClientVelocity] Acierto registrado. Total: {_successCount}");
+    }
+
     // ══════════════════════════════════════════════════════════════════════════════
     // FLUJO INICIAL - 3 PRODUCTOS ANTES DEL RETO
     // ══════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Inicia un nuevo intento (override completo porque el flujo es diferente).
+    /// Inicia un nuevo intento.
     /// </summary>
     private void StartNewAttemptAngry()
     {
         scannedCount = 0;
-        challengeStarted = false;
+        _challengeStarted = false;
 
         currentCustomer = customerSpawner.SpawnCustomer();
         currentCustomerMovement = currentCustomer.GetComponent<CustomerMovement>();
-        currentClientComponent = currentCustomer.GetComponent<Client>();
+        _currentClientComponent = currentCustomer.GetComponent<Client>();
 
         cameraController.MoveToPosition(GetStartCameraPosition(), () =>
         {
@@ -180,7 +272,7 @@ public class AngryClientVelocity : LCPaymentActivityBase
         ReturnCurrentProductToPool();
         scannedCount++;
 
-        if (!challengeStarted)
+        if (!_challengeStarted)
         {
             // Fase inicial: spawnar siguiente producto o mostrar diálogo
             SpawnNextInitialProduct();
@@ -188,9 +280,9 @@ public class AngryClientVelocity : LCPaymentActivityBase
         }
 
         // Fase de reto: actualizar contador
-        scannedCountText.text = $"{scannedCount} / {totalToScan}";
+        scannedCountText.text = $"{scannedCount} / {_totalToScan}";
 
-        if (scannedCount < totalToScan)
+        if (scannedCount < _totalToScan)
         {
             SpawnNextChallengeProduct();
         }
@@ -209,7 +301,7 @@ public class AngryClientVelocity : LCPaymentActivityBase
     /// </summary>
     private void ShowAngryDialog()
     {
-        var entry = DialogSystem.Instance.GetNextComment("angry_velocity");
+        var entry = DialogSystem.Instance.GetNextComment("impatient");
         if (entry == null) return;
 
         UpdateInstructionOnce(1, () =>
@@ -217,7 +309,7 @@ public class AngryClientVelocity : LCPaymentActivityBase
             cameraController.MoveToPosition("Actividad 1 Cliente Camera", () =>
             {
                 DialogSystem.Instance.ShowClientDialog(
-                    currentClientComponent,
+                    _currentClientComponent,
                     entry.clientText,
                     () =>
                     {
@@ -227,8 +319,8 @@ public class AngryClientVelocity : LCPaymentActivityBase
                                 entry.question,
                                 entry.options,
                                 entry.correctAnswer,
-                                () => BeginTimedChallenge(),
-                                () => SoundManager.Instance.PlaySound("error")
+                                OnCorrectDialogAnswer,
+                                OnWrongDialogAnswer
                             );
                         }
                         else
@@ -238,6 +330,23 @@ public class AngryClientVelocity : LCPaymentActivityBase
                     });
             });
         });
+    }
+
+    /// <summary>
+    /// Callback cuando el usuario responde correctamente al diálogo.
+    /// </summary>
+    private void OnCorrectDialogAnswer()
+    {
+        RegisterSuccess();
+        BeginTimedChallenge();
+    }
+
+    /// <summary>
+    /// Callback cuando el usuario responde incorrectamente al diálogo.
+    /// </summary>
+    private void OnWrongDialogAnswer()
+    {
+        RegisterError();
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
@@ -253,18 +362,25 @@ public class AngryClientVelocity : LCPaymentActivityBase
         {
             UpdateInstructionOnce(2, () =>
             {
-                challengeStarted = true;
+                _challengeStarted = true;
                 scannedCount = 0;
 
                 // Dificultad aumenta con cada intento
-                totalToScan = 10 + (currentAttempt * 5);
-                maxTime = 15 + (currentAttempt * 5);
+                _totalToScan = 10 + (currentAttempt * 5);
+                _maxTime = 15 + (currentAttempt * 5);
 
                 // Mostrar UI del reto
                 scannedCountText.enabled = true;
-                remainingTimeText.enabled = true;
-                scannedCountText.text = $"0 / {totalToScan}";
-                remainingTimeText.text = $"{maxTime:F0}s";
+                scannedCountText.text = $"0 / {_totalToScan}";
+
+                // Configurar y mostrar barra de paciencia
+                if (patienceSlider != null)
+                {
+                    patienceSlider.gameObject.SetActive(true);
+                    patienceSlider.maxValue = 1f;
+                    patienceSlider.value = 1f;
+                    UpdatePatienceColor(1f);
+                }
 
                 StartChallengeTimer();
                 SpawnNextChallengeProduct();
@@ -277,7 +393,7 @@ public class AngryClientVelocity : LCPaymentActivityBase
     /// </summary>
     private void SpawnNextChallengeProduct()
     {
-        if (scannedCount < totalToScan)
+        if (scannedCount < _totalToScan)
         {
             GameObject p = GetPooledProduct(scannedCount % productNames.Length, spawnPoint);
             if (p != null)
@@ -294,32 +410,74 @@ public class AngryClientVelocity : LCPaymentActivityBase
     /// </summary>
     private void StartChallengeTimer()
     {
-        timerActive = true;
-        currentTime = maxTime;
+        _timerActive = true;
+        _currentTime = _maxTime;
 
-        if (challengeTimerCoroutine != null)
-            StopCoroutine(challengeTimerCoroutine);
+        if (_challengeTimerCoroutine != null)
+            StopCoroutine(_challengeTimerCoroutine);
 
-        challengeTimerCoroutine = StartCoroutine(UpdateChallengeTimer());
+        _challengeTimerCoroutine = StartCoroutine(UpdateChallengeTimer());
     }
 
     /// <summary>
-    /// Coroutine que actualiza el timer del reto.
+    /// Coroutine que actualiza la barra de paciencia del cliente.
+    /// Verde (100%-60%) → Amarillo (60%-30%) → Rojo (30%-0%)
     /// </summary>
     private IEnumerator UpdateChallengeTimer()
     {
-        while (currentTime > 0 && timerActive)
+        while (_currentTime > 0 && _timerActive)
         {
-            currentTime -= Time.deltaTime;
-            remainingTimeText.text = $"{currentTime:F0}s";
+            _currentTime -= Time.deltaTime;
+
+            // Actualizar barra de paciencia (0 a 1)
+            float normalizedValue = Mathf.Clamp01(_currentTime / _maxTime);
+
+            if (patienceSlider != null)
+            {
+                patienceSlider.value = normalizedValue;
+                UpdatePatienceColor(normalizedValue);
+            }
+
             yield return null;
         }
 
-        if (scannedCount < totalToScan)
+        if (scannedCount < _totalToScan)
         {
-            timerActive = false;
-            HandleFail();
+            _timerActive = false;
+            HandleChallengeFail();
         }
+    }
+
+    /// <summary>
+    /// Actualiza el color del fill de la barra de paciencia.
+    /// Verde (100%-60%) → Amarillo (60%-30%) → Rojo (30%-0%)
+    /// </summary>
+    private void UpdatePatienceColor(float normalizedValue)
+    {
+        if (patienceSliderFill == null) return;
+
+        Color patienceColor;
+
+        if (normalizedValue > 0.6f)
+        {
+            // Verde → Amarillo (100% - 60%)
+            float t = (normalizedValue - 0.6f) / 0.4f;
+            patienceColor = Color.Lerp(Color.yellow, Color.green, t);
+        }
+        else if (normalizedValue > 0.3f)
+        {
+            // Amarillo → Naranja (60% - 30%)
+            float t = (normalizedValue - 0.3f) / 0.3f;
+            patienceColor = Color.Lerp(new Color(1f, 0.5f, 0f), Color.yellow, t);
+        }
+        else
+        {
+            // Naranja → Rojo (30% - 0%)
+            float t = normalizedValue / 0.3f;
+            patienceColor = Color.Lerp(Color.red, new Color(1f, 0.5f, 0f), t);
+        }
+
+        patienceSliderFill.color = patienceColor;
     }
 
     /// <summary>
@@ -327,9 +485,14 @@ public class AngryClientVelocity : LCPaymentActivityBase
     /// </summary>
     private void EndChallenge()
     {
-        timerActive = false;
+        _timerActive = false;
+
+        // Ocultar UI del reto
         scannedCountText.enabled = false;
-        remainingTimeText.enabled = false;
+        if (patienceSlider != null) patienceSlider.gameObject.SetActive(false);
+
+        // Registrar éxito del reto
+        RegisterSuccess();
 
         cameraController.MoveToPosition(GetSubtotalCameraPosition(), () =>
         {
@@ -341,18 +504,62 @@ public class AngryClientVelocity : LCPaymentActivityBase
     }
 
     /// <summary>
-    /// Maneja el fallo del reto (tiempo agotado).
+    /// Maneja el fallo del reto (paciencia agotada).
+    /// Registra error, cliente se queja, y reinicia el reto.
+    /// El jugador SIEMPRE debe completar el escaneo para avanzar.
     /// </summary>
-    private void HandleFail()
+    private void HandleChallengeFail()
     {
-        failPanel.SetActive(true);
-        SoundManager.Instance.PlaySound("tryagain");
+        // Ocultar UI del reto
+        scannedCountText.enabled = false;
+        if (patienceSlider != null) patienceSlider.gameObject.SetActive(false);
 
-        retryButton.onClick.RemoveAllListeners();
-        retryButton.onClick.AddListener(() =>
+        // Limpiar producto activo si quedó uno en escena
+        ReturnCurrentProductToPool();
+        scanner.ClearUI();
+
+        // Registrar error por fallar el reto
+        RegisterError();
+
+        // Cliente se queja y luego reinicia el reto
+        cameraController.MoveToPosition("Actividad 1 Cliente Camera", () =>
         {
-            failPanel.SetActive(false);
-            RestartActivityAngry();
+            DialogSystem.Instance.ShowClientDialog(
+                _currentClientComponent,
+                "¡Estás tardando demasiado! Apúrate por favor.",
+                () =>
+                {
+                    DialogSystem.Instance.HideDialog();
+                    RestartChallenge();
+                });
+        });
+    }
+
+    /// <summary>
+    /// Reinicia solo el reto (no toda la actividad).
+    /// La barra se rellena y los productos se spawnean de nuevo.
+    /// </summary>
+    private void RestartChallenge()
+    {
+        scannedCount = 0;
+        _challengeStarted = true;
+
+        cameraController.MoveToPosition(GetStartCameraPosition(), () =>
+        {
+            // Mostrar UI del reto nuevamente
+            scannedCountText.enabled = true;
+            scannedCountText.text = $"0 / {_totalToScan}";
+
+            // Resetear barra de paciencia
+            if (patienceSlider != null)
+            {
+                patienceSlider.gameObject.SetActive(true);
+                patienceSlider.value = 1f;
+                UpdatePatienceColor(1f);
+            }
+
+            StartChallengeTimer();
+            SpawnNextChallengeProduct();
         });
     }
 
@@ -369,12 +576,12 @@ public class AngryClientVelocity : LCPaymentActivityBase
         {
             DialogSystem.Instance.ShowClientDialog(
                 "Tu",
-                dialog: "Disculpe, ¿Cuál sera su metódo de pago?",
+                dialog: "Disculpe, ¿cuál será su método de pago?",
                 onComplete: () =>
                 {
                     DialogSystem.Instance.ShowClientDialog(
-                        currentClientComponent,
-                        dialog: "Con tarjeta, apurese",
+                        _currentClientComponent,
+                        dialog: "Con tarjeta, apúrese",
                         onComplete: () =>
                         {
                             DialogSystem.Instance.HideDialog(false);
@@ -423,10 +630,7 @@ public class AngryClientVelocity : LCPaymentActivityBase
         UpdateInstructionOnce(5);
         ActivateButtonWithSequence(selectedButtons, 0, () =>
         {
-            ActivateButtonWithSequence(enterLastClicking, 0, () =>
-            {
-                MoveClientAndGenerateTicket();
-            });
+            ActivateButtonWithSequence(enterLastClicking, 0, MoveClientAndGenerateTicket);
         });
     }
 
@@ -470,12 +674,12 @@ public class AngryClientVelocity : LCPaymentActivityBase
         }
         else
         {
-            ShowActivityCompletePanel();
+            ShowActivityComplete();
         }
     }
 
     /// <summary>
-    /// Reinicia la actividad.
+    /// Reinicia la actividad para el siguiente intento.
     /// </summary>
     private void RestartActivityAngry()
     {
@@ -489,9 +693,9 @@ public class AngryClientVelocity : LCPaymentActivityBase
     }
 
     /// <summary>
-    /// Muestra el panel de éxito.
+    /// Muestra el resultado usando el Adapter/UnifiedSummaryPanel.
     /// </summary>
-    private void ShowActivityCompletePanel()
+    protected override void ShowActivityComplete()
     {
         StopActivityTimer();
         commandManager.commandList.Clear();
@@ -499,15 +703,19 @@ public class AngryClientVelocity : LCPaymentActivityBase
 
         cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
         {
-            continueButton.onClick.RemoveAllListeners();
             SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
 
-            continueButton.onClick.AddListener(() =>
+            var adapter = GetComponent<ActivityMetricsAdapter>();
+
+            if (adapter != null)
             {
-                cameraController.MoveToPosition(GetStartCameraPosition());
+                adapter.NotifyActivityCompleted();
+            }
+            else
+            {
+                Debug.LogWarning("[AngryClientVelocity] ActivityMetricsAdapter no encontrado. Completando sin estrellas.");
                 CompleteActivity();
-            });
+            }
         });
     }
 
@@ -520,18 +728,25 @@ public class AngryClientVelocity : LCPaymentActivityBase
         base.ResetValues();
 
         // Reset específico de AngryVelocity
-        scannedCountText.enabled = false;
-        remainingTimeText.enabled = false;
-        challengeStarted = false;
-        timerActive = false;
-
-        if (scannedCountText != null) scannedCountText.text = "0 / 0";
-        if (remainingTimeText != null) remainingTimeText.text = "0s";
-
-        if (challengeTimerCoroutine != null)
+        if (scannedCountText != null)
         {
-            StopCoroutine(challengeTimerCoroutine);
-            challengeTimerCoroutine = null;
+            scannedCountText.enabled = false;
+            scannedCountText.text = "0 / 0";
+        }
+
+        if (patienceSlider != null)
+        {
+            patienceSlider.gameObject.SetActive(false);
+            patienceSlider.value = 1f;
+        }
+
+        _challengeStarted = false;
+        _timerActive = false;
+
+        if (_challengeTimerCoroutine != null)
+        {
+            StopCoroutine(_challengeTimerCoroutine);
+            _challengeTimerCoroutine = null;
         }
 
         // Mover cliente actual a la salida si existe
@@ -543,72 +758,19 @@ public class AngryClientVelocity : LCPaymentActivityBase
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
-    // REGISTRO DE DIÁLOGOS
+    // LIMPIEZA
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Registra los diálogos del cliente molesto en DialogSystem.
-    /// </summary>
-    private void RegisterAngryVelocityDialogs()
+    protected override void OnDisable()
     {
-        DialogSystem.Instance.customerComments.AddRange(new List<CustomerComment>
+        base.OnDisable();
+
+        // ✅ FIX M-12: Limpiar coroutine del challenge timer al desactivar
+        _timerActive = false;
+        if (_challengeTimerCoroutine != null)
         {
-            new CustomerComment
-            {
-                category = "angry_velocity",
-                clientText = "Tengo prisa, ¿puedes atenderme más rápido?",
-                question = "¿Cómo deberías responder?",
-                options = new List<string>
-                {
-                    "Sí, lo haré en seguida",
-                    "No, espera como todos",
-                    "Estoy en lo mío",
-                    "¿Y qué si no?"
-                },
-                correctAnswer = "Sí, lo haré en seguida"
-            },
-            new CustomerComment
-            {
-                category = "angry_velocity",
-                clientText = "¿Siempre se tardan así? Esto es desesperante.",
-                question = "¿Cómo deberías responder?",
-                options = new List<string>
-                {
-                    "Haré lo posible por agilizar",
-                    "¿Vienes a quejarte o a comprar?",
-                    "No es mi problema",
-                    "Entonces vete"
-                },
-                correctAnswer = "Haré lo posible por agilizar"
-            },
-            new CustomerComment
-            {
-                category = "angry_velocity",
-                clientText = "¿Puedes darte prisa? No tengo todo el día.",
-                question = "¿Cómo deberías responder?",
-                options = new List<string>
-                {
-                    "Sí, enseguida",
-                    "Si no te gusta, ve a otra caja",
-                    "Aguanta como todos",
-                    "Yo tampoco tengo todo el día"
-                },
-                correctAnswer = "Sí, enseguida"
-            },
-            new CustomerComment
-            {
-                category = "angry_velocity",
-                clientText = "¡Qué lentitud! Esto debería ser más rápido.",
-                question = "¿Cómo deberías responder?",
-                options = new List<string>
-                {
-                    "Disculpa, voy a acelerar el proceso",
-                    "No soy robot",
-                    "A mí también me frustra",
-                    "Eso no depende de mí"
-                },
-                correctAnswer = "Disculpa, voy a acelerar el proceso"
-            }
-        });
+            StopCoroutine(_challengeTimerCoroutine);
+            _challengeTimerCoroutine = null;
+        }
     }
 }

@@ -51,7 +51,6 @@ public class CommandManager : MonoBehaviour
 
     public void OnButtonPressed(string buttonName)
     {
-        Debug.Log($"Button pressed: {buttonName}");
         OnCommandExecuted?.Invoke(buttonName);
 
         // 🔹 Si el botón presionado es un comando registrado, ejecutarlo inmediatamente

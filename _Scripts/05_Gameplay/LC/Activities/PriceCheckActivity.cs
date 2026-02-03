@@ -489,24 +489,6 @@ public class PriceCheckActivity : ActivityBase
 
             if (adapter != null)
             {
-                // ✅ MENSAJE DINÁMICO según errores cometidos
-                if (wrongAnswers == 0)
-                {
-                    adapter.customMessage = "AHORA SABES CÓMO CONSULTAR EL PRECIO DE UN ARTíCULO.";
-                }
-                else if (wrongAnswers == 1)
-                {
-                    adapter.customMessage = "¡Bien hecho! Acertaste después de 1 intento.";
-                }
-                else if (wrongAnswers <= 3)
-                {
-                    adapter.customMessage = $"Acertaste después de {wrongAnswers} intentos.";
-                }
-                else
-                {
-                    adapter.customMessage = "Necesitas repasar los precios de productos.";
-                }
-
                 Debug.Log($"[PriceCheck] Correctas: {correctAnswers}, Incorrectas: {wrongAnswers}");
                 adapter.NotifyActivityCompleted();
             }
@@ -541,5 +523,15 @@ public class PriceCheckActivity : ActivityBase
                 screenFlash.gameObject.SetActive(false);
                 screenFlash.canvasRenderer.SetAlpha(0f);
             });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void OnDisable()
+    {
+        base.OnDisable();
+        DOTween.Kill(this);
     }
 }

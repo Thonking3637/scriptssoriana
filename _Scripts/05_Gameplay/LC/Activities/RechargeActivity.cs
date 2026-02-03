@@ -3,77 +3,207 @@ using TMPro;
 using System.Collections.Generic;
 using UnityEngine.UI;
 
-public class RechargeActivity: ActivityBase
+/// <summary>
+/// RechargeActivity - Actividad de Recarga Telefónica
+/// 
+/// FLUJO:
+/// 1. Cliente llega y solicita recarga telefónica
+/// 2. Cajero presiona comando RECARGA_TELEFONICA
+/// 3. Ingresar número de teléfono (2 veces para confirmar)
+/// 4. Seleccionar compañía telefónica
+/// 5. Seleccionar monto de recarga
+/// 6. Repetir 3 veces → Completar actividad
+/// 
+/// TIPO DE EVALUACIÓN: AccuracyBased
+/// - Se trackean errores en: teléfono incorrecto, compañía incorrecta, monto incorrecto
+/// - El adapter lee el campo _errorCount por reflection
+/// 
+/// CONFIGURACIÓN DEL ADAPTER:
+/// - evaluationType: AccuracyBased
+/// - errorsFieldName: "_errorCount"
+/// - successesFieldName: "_successCount"
+/// - expectedTotal: 9 (3 intentos × 3 decisiones por intento)
+/// - maxAllowedErrors: 3
+/// 
+/// INSTRUCCIONES:
+/// 0 = Bienvenida
+/// 1 = Presionar comando RECARGA
+/// 2 = Ingresar número de teléfono
+/// 3 = Seleccionar compañía
+/// 4 = Seleccionar monto
+/// 5 = Siguiente cliente / Competencia
+/// </summary>
+public class RechargeActivity : ActivityBase
 {
-    [Header("UI General")]
-    public TextMeshProUGUI liveTimerText;
-    public TextMeshProUGUI successTimeText;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - CLIENTE
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Configuración del Cliente")]
-    public CustomerSpawner customerSpawner;
-    private GameObject currentCustomer;
-    private Client currentClient;
+    [Header("Cliente")]
+    [SerializeField] private CustomerSpawner customerSpawner;
 
-    [Header("Paneles de Input")]
-    public GameObject phoneInputPanel;
-    public TMP_InputField phoneInputField1;
-    public TMP_InputField phoneInputField2;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - UI TIMER
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Botones para Números")]
-    public List<Button> numberButtons;
-    public List<Button> enterButtons;
+    [Header("UI - Timer")]
+    [SerializeField] private TextMeshProUGUI liveTimerText;
+    [SerializeField] private TextMeshProUGUI successTimeText;
 
-    [Header("Panel de Compañías")]
-    public GameObject companyPanel;
-    public List<Button> companyButtons;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - PANELES DE INPUT
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Panel de Montos")]
-    public GameObject amountPanel;
-    public List<Button> amountButtons;
+    [Header("Input - Panel Teléfono")]
+    [SerializeField] private GameObject phoneInputPanel;
+    [SerializeField] private TMP_InputField phoneInputField1;
+    [SerializeField] private TMP_InputField phoneInputField2;
 
-    [Header("Botones de Comando")]
-    public List<Button> recargaCommandButtons;
+    [Header("Input - Botones Numéricos")]
+    [SerializeField] private List<Button> numberButtons;
+    [SerializeField] private List<Button> enterButtons;
 
-    [Header("Panel Final")]
-    public Button continueButton;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - PANELES DE SELECCIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    private int currentAttempt = 0;
-    private const int maxAttempts = 3;
+    [Header("Selección - Compañía")]
+    [SerializeField] private GameObject companyPanel;
+    [SerializeField] private List<Button> companyButtons;
+
+    [Header("Selección - Monto")]
+    [SerializeField] private GameObject amountPanel;
+    [SerializeField] private List<Button> amountButtons;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - COMANDOS
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    [Header("Comando Recarga")]
+    [SerializeField] private List<Button> recargaCommandButtons;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ESTADO INTERNO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    // Referencias cacheadas del cliente actual
+    private GameObject _currentCustomer;
+    private CustomerMovement _currentMovement;
+    private Client _currentClient;
+
+    // Control de intentos
+    private int _currentAttempt = 0;
+    private const int MAX_ATTEMPTS = 3;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS - LEÍDAS POR ADAPTER VÍA REFLECTION
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Contador de errores - El ActivityMetricsAdapter lee este campo.
+    /// Configurar en Inspector: errorsFieldName = "_errorCount"
+    /// </summary>
+    private int _errorCount = 0;
+
+    /// <summary>
+    /// Contador de aciertos - El ActivityMetricsAdapter puede leer este campo.
+    /// Configurar en Inspector: successesFieldName = "_successCount"
+    /// </summary>
+    private int _successCount = 0;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN DE CÁMARA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private const string CAM_START = "Iniciando Juego";
+    private const string CAM_CLIENT = "Cliente Camera";
+    private const string CAM_SHOW_RECHARGE = "Actividad 2 Mostrar Recarga";
+    private const string CAM_SHOW_NUMBER = "Actividad 2 Mostrar Numero";
+    private const string CAM_SHOW_COMPANY = "Actividad 2 Mostrar Company Buttons";
+    private const string CAM_SUCCESS = "Actividad Recharge Success";
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIFECYCLE
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void Initialize() { }
+
     public override void StartActivity()
     {
         base.StartActivity();
 
+        // Validar dependencias críticas
         if (customerSpawner == null)
         {
-            Debug.LogError("CustomerSpawner no está asignado.");
+            Debug.LogError("[RechargeActivity] CustomerSpawner no está asignado.");
             return;
         }
 
-        phoneInputPanel.SetActive(false);
-        companyPanel.SetActive(false);
-        amountPanel.SetActive(false);
-
-        InitializeCommands();
-
-        UpdateInstructionOnce(0, () =>
-        {        
-            StartNewAttempt();
-        });
-
+        // Configurar timer
         activityTimerText = liveTimerText;
         activityTimeText = successTimeText;
+
+        // Resetear métricas
+        ResetMetrics();
+
+        // Estado inicial de paneles
+        HideAllPanels();
+
+        // Configurar comandos
+        InitializeCommands();
+
+        // Iniciar flujo
+        UpdateInstructionOnce(0, StartNewAttempt);
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Resetea los contadores de métricas al iniciar la actividad.
+    /// </summary>
+    private void ResetMetrics()
+    {
+        _errorCount = 0;
+        _successCount = 0;
+    }
+
+    /// <summary>
+    /// Registra un error (teléfono incorrecto, compañía incorrecta, monto incorrecto).
+    /// </summary>
+    private void RegisterError()
+    {
+        _errorCount++;
+        SoundManager.Instance.PlaySound("error");
+        Debug.Log($"[RechargeActivity] Error registrado. Total errores: {_errorCount}");
+    }
+
+    /// <summary>
+    /// Registra un acierto (selección correcta).
+    /// </summary>
+    private void RegisterSuccess()
+    {
+        _successCount++;
+        SoundManager.Instance.PlaySound("success");
+        Debug.Log($"[RechargeActivity] Acierto registrado. Total aciertos: {_successCount}");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN DE COMANDOS
+    // ══════════════════════════════════════════════════════════════════════════════
 
     protected override void InitializeCommands()
     {
+        // Ocultar botones de comando inicialmente
         foreach (var button in recargaCommandButtons)
             button.gameObject.SetActive(false);
 
+        // Registrar comando de recarga
         CommandManager.CommandAction recargaCommand = new CommandManager.CommandAction
         {
             command = "RECARGA_TELEFONICA",
-            customAction = StartPhoneInput,
+            customAction = OnRecargaCommandPressed,
             requiredActivity = "Day3_Recarga",
             commandButtons = recargaCommandButtons
         };
@@ -81,213 +211,422 @@ public class RechargeActivity: ActivityBase
         commandManager.commandList.Add(recargaCommand);
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FLUJO PRINCIPAL
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Inicia un nuevo intento (cliente nuevo).
+    /// </summary>
     private void StartNewAttempt()
     {
-        currentCustomer = customerSpawner.SpawnCustomer();
-        currentClient = currentCustomer.GetComponent<Client>();
-        currentClient.GenerateRechargeData();
+        SpawnAndCacheCustomer();
+        MoveCustomerAndShowDialog();
+    }
 
-        cameraController.MoveToPosition("Iniciando Juego", () =>
+    /// <summary>
+    /// Spawnea cliente y cachea sus componentes.
+    /// </summary>
+    private void SpawnAndCacheCustomer()
+    {
+        _currentCustomer = customerSpawner.SpawnCustomer();
+
+        // Intentar usar cache del spawner (optimizado)
+        if (customerSpawner.TryGetCachedComponents(_currentCustomer, out var movement, out var client))
         {
-            cameraController.MoveToPosition("Cliente Camera", () =>
-            {
-                DialogSystem.Instance.ShowClientDialog(
-                    client: currentClient,
-                    dialog: $"Quisiera hacer una recarga telefónica al número <color=#FFA500>{currentClient.phoneNumber}</color> de <color=#FFA500>{currentClient.phoneCompany}</color> con el monto de <color=#FFA500>${currentClient.rechargeAmount}</color>.",
-                    onComplete: () =>
-                    {
-                        cameraController.MoveToPosition("Actividad 2 Mostrar Recarga", () =>
-                        {
-                            UpdateInstructionOnce(1);
-                            ActivateButtonWithSequence(recargaCommandButtons, 0);
-                        });
-                    }
-                );
+            _currentMovement = movement;
+            _currentClient = client;
+        }
+        else
+        {
+            // Fallback si el cache falla
+            _currentMovement = _currentCustomer.GetComponent<CustomerMovement>();
+            _currentClient = _currentCustomer.GetComponent<Client>();
+        }
 
+        // Generar datos aleatorios de recarga
+        _currentClient.GenerateRechargeData();
+    }
+
+    /// <summary>
+    /// Mueve cliente al checkout y muestra diálogo de solicitud.
+    /// </summary>
+    private void MoveCustomerAndShowDialog()
+    {
+        cameraController.MoveToPosition(CAM_START, () =>
+        {
+            cameraController.MoveToPosition(CAM_CLIENT, () =>
+            {
+                ShowRechargeRequestDialog();
             });
         });
     }
 
-    private void StartPhoneInput()
+    /// <summary>
+    /// Muestra el diálogo del cliente solicitando la recarga.
+    /// </summary>
+    private void ShowRechargeRequestDialog()
+    {
+        string dialogText = $"Quisiera hacer una recarga telefónica al número " +
+                           $"<color=#FFA500>{_currentClient.phoneNumber}</color> de " +
+                           $"<color=#FFA500>{_currentClient.phoneCompany}</color> con el monto de " +
+                           $"<color=#FFA500>${_currentClient.rechargeAmount}</color>.";
+
+        DialogSystem.Instance.ShowClientDialog(
+            client: _currentClient,
+            dialog: dialogText,
+            onComplete: () =>
+            {
+                cameraController.MoveToPosition(CAM_SHOW_RECHARGE, () =>
+                {
+                    UpdateInstructionOnce(1);
+                    ActivateButtonWithSequence(recargaCommandButtons, 0);
+                });
+            }
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 1: COMANDO RECARGA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Callback cuando se presiona el comando RECARGA_TELEFONICA.
+    /// </summary>
+    private void OnRecargaCommandPressed()
     {
         SoundManager.Instance.PlaySound("success");
+        StartPhoneInputPhase();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 2: INPUT DE TELÉFONO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Inicia la fase de input del número telefónico.
+    /// </summary>
+    private void StartPhoneInputPhase()
+    {
         phoneInputPanel.SetActive(true);
-        cameraController.MoveToPosition("Actividad 2 Mostrar Numero", () =>
+
+        cameraController.MoveToPosition(CAM_SHOW_NUMBER, () =>
         {
             UpdateInstructionOnce(2);
-            phoneInputPanel.SetActive(true);
-            phoneInputField1.text = "";
-            phoneInputField2.text = "";
-            phoneInputField1.ActivateInputField();
-            commandManager.navigationManager.SetActiveInputField(phoneInputField1);
-            GenerateNumberButtons(currentClient.phoneNumber, HandleFirstNumberEntered);
+
+            // Preparar primer input
+            PreparePhoneInput(phoneInputField1);
+
+            // Generar secuencia de botones para el número
+            GenerateNumberButtonSequence(_currentClient.phoneNumber, OnFirstNumberEntered);
         });
     }
 
-    private void HandleFirstNumberEntered()
-    {   
-        UpdateInstructionOnce(2);
-        commandManager.navigationManager.SetActiveInputField(phoneInputField2);
-        phoneInputField2.text = "";
-        phoneInputField2.DeactivateInputField();
-        phoneInputField2.ActivateInputField();
-        GenerateNumberButtons(currentClient.phoneNumber, HandleSecondNumberEntered);
+    /// <summary>
+    /// Prepara un campo de input de teléfono.
+    /// </summary>
+    private void PreparePhoneInput(TMP_InputField inputField)
+    {
+        inputField.text = "";
+        inputField.ActivateInputField();
+        commandManager.navigationManager.SetActiveInputField(inputField);
     }
 
-
-    private void HandleSecondNumberEntered()
+    /// <summary>
+    /// Callback cuando se ingresa el primer número.
+    /// </summary>
+    private void OnFirstNumberEntered()
     {
-        companyPanel.SetActive(true);
-        if (phoneInputField2.text == currentClient.phoneNumber)
+        UpdateInstructionOnce(2);
+
+        // Preparar segundo input (confirmación)
+        PreparePhoneInput(phoneInputField2);
+        phoneInputField2.DeactivateInputField();
+        phoneInputField2.ActivateInputField();
+
+        // Generar secuencia para confirmar
+        GenerateNumberButtonSequence(_currentClient.phoneNumber, OnSecondNumberEntered);
+    }
+
+    /// <summary>
+    /// Callback cuando se ingresa el segundo número (confirmación).
+    /// </summary>
+    private void OnSecondNumberEntered()
+    {
+        // Validar que ambos números coincidan
+        if (phoneInputField2.text == _currentClient.phoneNumber)
         {
+            // ✅ Teléfono correcto
+            RegisterSuccess();
             phoneInputPanel.SetActive(false);
-            ShowCompanyButtons();
+            StartCompanySelectionPhase();
         }
         else
         {
-            SoundManager.Instance.PlaySound("error");
-            phoneInputField1.text = "";
-            phoneInputField2.text = "";
-            StartPhoneInput();
+            // ❌ Error: números no coinciden
+            RegisterError();
+            ResetPhoneInputs();
+            StartPhoneInputPhase();
         }
     }
 
-    private void ShowCompanyButtons()
+    /// <summary>
+    /// Limpia los campos de input de teléfono.
+    /// </summary>
+    private void ResetPhoneInputs()
     {
-        cameraController.MoveToPosition("Actividad 2 Mostrar Company Buttons", () =>
+        phoneInputField1.text = "";
+        phoneInputField2.text = "";
+    }
+
+    /// <summary>
+    /// Genera la secuencia de botones numéricos para ingresar un número.
+    /// </summary>
+    private void GenerateNumberButtonSequence(string targetNumber, System.Action onComplete)
+    {
+        List<Button> selectedButtons = GetButtonsForAmount(targetNumber, numberButtons);
+
+        // Ocultar todos los botones numéricos primero
+        foreach (var button in numberButtons)
+            button.gameObject.SetActive(false);
+
+        // Activar secuencia de botones + Enter
+        ActivateButtonWithSequence(selectedButtons, 0, () =>
+        {
+            AnimateButtonsSequentiallyWithActivation(enterButtons, () =>
+            {
+                SoundManager.Instance.PlaySound("success");
+                onComplete?.Invoke();
+            });
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 3: SELECCIÓN DE COMPAÑÍA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Inicia la fase de selección de compañía telefónica.
+    /// </summary>
+    private void StartCompanySelectionPhase()
+    {
+        cameraController.MoveToPosition(CAM_SHOW_COMPANY, () =>
         {
             UpdateInstructionOnce(3);
+
             companyPanel.SetActive(true);
-
-            foreach (var button in companyButtons)
-            {
-                button.gameObject.SetActive(true);
-                button.onClick.RemoveAllListeners();
-
-                string company = button.GetComponentInChildren<TextMeshProUGUI>().text;
-
-                if (company == currentClient.phoneCompany)
-                {
-                    button.onClick.AddListener(() => HandleCorrectCompany());
-                }
-                else
-                {
-                    button.onClick.AddListener(() => HandleIncorrectSelection());
-                }
-            }
+            ConfigureCompanyButtons();
         });
     }
 
-    private void HandleCorrectCompany()
+    /// <summary>
+    /// Configura los botones de compañía con la lógica de validación.
+    /// </summary>
+    private void ConfigureCompanyButtons()
     {
-        amountPanel.SetActive(true);
-        SoundManager.Instance.PlaySound("success");
+        foreach (var button in companyButtons)
+        {
+            button.gameObject.SetActive(true);
+            button.onClick.RemoveAllListeners();
+
+            string companyName = button.GetComponentInChildren<TextMeshProUGUI>().text;
+
+            if (companyName == _currentClient.phoneCompany)
+            {
+                button.onClick.AddListener(OnCorrectCompanySelected);
+            }
+            else
+            {
+                button.onClick.AddListener(OnIncorrectCompanySelected);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Callback cuando se selecciona la compañía correcta.
+    /// </summary>
+    private void OnCorrectCompanySelected()
+    {
+        RegisterSuccess();
         companyPanel.SetActive(false);
-        ShowAmountButtons();
+        StartAmountSelectionPhase();
     }
 
-    private void HandleIncorrectSelection()
+    /// <summary>
+    /// Callback cuando se selecciona una compañía incorrecta.
+    /// </summary>
+    private void OnIncorrectCompanySelected()
     {
-        SoundManager.Instance.PlaySound("error");
+        RegisterError();
+        // No avanza - el usuario debe seleccionar la correcta
     }
 
-    private void ShowAmountButtons()
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 4: SELECCIÓN DE MONTO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Inicia la fase de selección de monto.
+    /// </summary>
+    private void StartAmountSelectionPhase()
     {
-        cameraController.MoveToPosition("Actividad 2 Mostrar Company Buttons", () =>
+        cameraController.MoveToPosition(CAM_SHOW_COMPANY, () =>
         {
             UpdateInstructionOnce(4);
+
             amountPanel.SetActive(true);
-
-            foreach (var button in amountButtons)
-            {
-                button.gameObject.SetActive(true);
-                button.onClick.RemoveAllListeners();
-
-                int amount = int.Parse(button.GetComponentInChildren<TextMeshProUGUI>().text);
-
-                if (amount == currentClient.rechargeAmount)
-                {
-                    button.onClick.AddListener(() => HandleCorrectAmount());
-                }
-                else
-                {
-                    button.onClick.AddListener(() => HandleIncorrectSelection());
-                }
-            }
+            ConfigureAmountButtons();
         });
     }
 
-    private void HandleCorrectAmount()
+    /// <summary>
+    /// Configura los botones de monto con la lógica de validación.
+    /// </summary>
+    private void ConfigureAmountButtons()
     {
-        SoundManager.Instance.PlaySound("success");
-        amountPanel.SetActive(false);
-        FinalizeAttempt();
+        foreach (var button in amountButtons)
+        {
+            button.gameObject.SetActive(true);
+            button.onClick.RemoveAllListeners();
+
+            string amountText = button.GetComponentInChildren<TextMeshProUGUI>().text;
+
+            if (int.TryParse(amountText, out int amount) && amount == _currentClient.rechargeAmount)
+            {
+                button.onClick.AddListener(OnCorrectAmountSelected);
+            }
+            else
+            {
+                button.onClick.AddListener(OnIncorrectAmountSelected);
+            }
+        }
     }
 
-    private void FinalizeAttempt()
+    /// <summary>
+    /// Callback cuando se selecciona el monto correcto.
+    /// </summary>
+    private void OnCorrectAmountSelected()
     {
-        currentAttempt++;
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-        customerMovement.MoveToExit();
+        RegisterSuccess();
+        amountPanel.SetActive(false);
+        OnAttemptComplete();
+    }
 
-        if (currentAttempt < maxAttempts)
+    /// <summary>
+    /// Callback cuando se selecciona un monto incorrecto.
+    /// </summary>
+    private void OnIncorrectAmountSelected()
+    {
+        RegisterError();
+        // No avanza - el usuario debe seleccionar el correcto
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONTROL DE INTENTOS
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Procesa la finalización de un intento.
+    /// </summary>
+    private void OnAttemptComplete()
+    {
+        _currentAttempt++;
+
+        // Mover cliente a la salida
+        _currentMovement.MoveToExit();
+
+        // ¿Más intentos o finalizar?
+        if (_currentAttempt < MAX_ATTEMPTS)
         {
-            RestartActivity();
+            PrepareNextAttempt();
         }
         else
         {
             ActivityComplete();
         }
     }
-    private void RestartActivity()
+
+    /// <summary>
+    /// Prepara el siguiente intento con instrucción de transición.
+    /// </summary>
+    private void PrepareNextAttempt()
     {
         UpdateInstructionOnce(5, StartNewAttempt, StartCompetition);
     }
 
-    public void StartCompetition()
+    // ══════════════════════════════════════════════════════════════════════════════
+    // COMPETENCIA (TIMER)
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Inicia el modo competencia con música y timer.
+    /// </summary>
+    private void StartCompetition()
     {
-        SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, false);
-        liveTimerText.GetComponent<TextMeshProUGUI>().enabled = true;
+        if (activityMusicClip != null)
+        {
+            SoundManager.Instance.SetActivityMusic(activityMusicClip, 0.2f, false);
+        }
+
+        if (liveTimerText != null)
+        {
+            liveTimerText.gameObject.SetActive(true);
+        }
+
         StartActivityTimer();
     }
 
-    public void ActivityComplete()
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FINALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Completa la actividad mostrando el panel de éxito.
+    /// </summary>
+    private void ActivityComplete()
     {
         StopActivityTimer();
+
+        // Limpiar estado
         commandManager.commandList.Clear();
         DialogSystem.Instance.HideDialog();
-        cameraController.MoveToPosition("Actividad Recharge Success", () =>
+
+        cameraController.MoveToPosition(CAM_SUCCESS, () =>
         {
-            continueButton.onClick.RemoveAllListeners();
             SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
 
-            continueButton.onClick.AddListener(() =>
+            // Intentar usar ActivityMetricsAdapter para el sistema de 3 estrellas
+            var adapter = GetComponent<ActivityMetricsAdapter>();
+
+            if (adapter != null)
             {
-                cameraController.MoveToPosition("Iniciando Juego");
-                CompleteActivity();
-            });
+                // El adapter lee _errorCount y _successCount por reflection
+                adapter.NotifyActivityCompleted();
+            }
+
         });
     }
 
-    private void GenerateNumberButtons(string target, System.Action onComplete)
+    // ══════════════════════════════════════════════════════════════════════════════
+    // UTILIDADES
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Oculta todos los paneles de la actividad.
+    /// </summary>
+    private void HideAllPanels()
     {
-        List<Button> selectedButtons = GetButtonsForAmount(target, numberButtons);
-
-        foreach (var button in numberButtons)
-        {
-            button.gameObject.SetActive(false);
-        }
-
-        ActivateButtonWithSequence(selectedButtons, 0, () =>
-        {
-            AnimateButtonsSequentiallyWithActivation(enterButtons, () =>
-            {
-                SoundManager.Instance.PlaySound("success");
-                onComplete.Invoke();
-            });
-        });
+        phoneInputPanel.SetActive(false);
+        companyPanel.SetActive(false);
+        amountPanel.SetActive(false);
     }
 
-    protected override void Initialize() { }
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void OnDisable()
+    {
+        base.OnDisable();
+    }
 }

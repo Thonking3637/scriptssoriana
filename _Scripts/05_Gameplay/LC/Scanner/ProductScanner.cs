@@ -105,21 +105,17 @@ public class ProductScanner : MonoBehaviour
 
         if (existingProduct != null)
         {
-            // Producto ya escaneado, solo incrementar cantidad
             existingProduct.quantity++;
             lastScannedGroupedProduct = existingProduct;
         }
         else
         {
-            // ✅ OPTIMIZADO: Crear objeto ligero en lugar de ScriptableObject
             ScannedProductData newProduct = new ScannedProductData(
                 product.productData.code,
                 product.productData.productName,
                 product.productData.price,
                 1
             );
-
-            // ❌ ELIMINADO: SaveProduct(newProduct) - causaba el bajón de FPS
 
             scannedProducts.Add(newProduct);
             lastScannedGroupedProduct = newProduct;
@@ -129,10 +125,8 @@ public class ProductScanner : MonoBehaviour
 
         UpdateUI();
 
-        // ✅ Evento limpio
         OnProductScanned?.Invoke(product);
 
-        // 🧓 LEGACY (solo si está activo)
         if (useLegacyReflection)
             CallRegisterProductScanned();
     }

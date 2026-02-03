@@ -248,7 +248,6 @@ public class RedeemPointsActivity : LCPaymentActivityBase
         {
             UpdateInstructionOnce(5);
             paymentPanel.SetActive(true);
-            ActivateCommandButtons(enterButtons);
             AnimateButtonsSequentiallyWithActivation(enterButtons);
         });
     }
@@ -330,7 +329,15 @@ public class RedeemPointsActivity : LCPaymentActivityBase
         ResetValues();
         cardInteraction.ResetCard();
         RegenerateProductValues();
-        UpdateInstructionOnce(8, CheckAndStartNewAttempt, StartCompetition);
+
+        if (currentAttempt == 1)
+        {
+            UpdateInstructionOnce(8, CheckAndStartNewAttempt, StartCompetition);
+        }
+        else
+        {
+            UpdateInstructionOnce(8, CheckAndStartNewAttempt);
+        }
     }
 
     /// <summary>

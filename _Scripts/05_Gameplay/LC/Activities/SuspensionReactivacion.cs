@@ -5,107 +5,281 @@ using DG.Tweening;
 using System.Collections.Generic;
 using System;
 
+/// <summary>
+/// SuspensionReactivacion - Actividad de Suspensión y Reactivación de Cuenta
+/// 
+/// FLUJO:
+/// 1. Cliente llega → Escanear 4 productos
+/// 2. Cliente olvida tarjeta → Se va
+/// 3. Presionar SUPER → Panel Suspender
+/// 4. Supervisor 1 llega → Diálogo → Contraseña → Ticket suspensión
+/// 5. Cliente regresa → Diálogo reactivación
+/// 6. Presionar SUPER → Panel Reactivar
+/// 7. Supervisor 2 llega → Diálogo → Contraseña → Ticket reactivación
+/// 8. Restaurar datos → Completar
+/// 
+/// TIPO DE EVALUACIÓN: ComboMetric
+/// - Tiempo: Se mide toda la actividad
+/// - Errores: Se trackean respuestas incorrectas en los 3 diálogos
+/// 
+/// CONFIGURACIÓN DEL ADAPTER:
+/// - evaluationType: ComboMetric
+/// - errorsFieldName: "_errorCount"
+/// - successesFieldName: "_successCount"
+/// - expectedTotal: 3 (3 diálogos con opciones)
+/// - maxAllowedErrors: 3
+/// 
+/// INSTRUCCIONES:
+/// 0 = Bienvenida
+/// 1 = Escanear productos
+/// 2 = Cliente se queja (olvida tarjeta)
+/// 3 = Presionar SUPER
+/// 4 = Presionar Suspender
+/// 5 = Supervisor viene
+/// 6 = Supervisor camina al teclado
+/// 7 = Contraseña
+/// 8 = Ticket suspensión
+/// 9 = Cliente regresa
+/// 10 = Presionar SUPER (reactivar)
+/// 11 = Presionar Reactivar
+/// 12 = Supervisor 2 viene
+/// 13 = Contraseña 2
+/// 14 = Ticket reactivación
+/// 15 = Restaurar datos
+/// 16 = Completar
+/// </summary>
 public class SuspensionReactivacion : ActivityBase
 {
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - CLIENTE Y PRODUCTOS
+    // ══════════════════════════════════════════════════════════════════════════════
+
     [Header("Cliente y Productos")]
-    public CustomerSpawner customerSpawner;
-    public Transform productSpawnPoint;
-    public ProductScanner scanner;
+    [SerializeField] private CustomerSpawner customerSpawner;
+    [SerializeField] private Transform productSpawnPoint;
+    [SerializeField] private ProductScanner scanner;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - UI
+    // ══════════════════════════════════════════════════════════════════════════════
 
     [Header("UI")]
-    public TextMeshProUGUI activityProductsText;
-    public TextMeshProUGUI activityTotalPriceText;
-    public TextMeshProUGUI passwordText;
+    [SerializeField] private TextMeshProUGUI activityProductsText;
+    [SerializeField] private TextMeshProUGUI activityTotalPriceText;
+    [SerializeField] private TextMeshProUGUI passwordText;
 
-    [Header("Buttons")]
-    public List<Button> superPressedButton;
-    public List<Button> superPressedButton2;
-    public Button continueButton;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - BOTONES
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    [Header("Botones")]
+    [SerializeField] private List<Button> superPressedButton;
+    [SerializeField] private List<Button> superPressedButton2;
+    [SerializeField] private Button continueButton;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - PANEL SUSPENDER/REACTIVAR
+    // ══════════════════════════════════════════════════════════════════════════════
 
     [Header("Panel Reactivar/Activar")]
-    public GameObject superPanel;
-    public Button suspendButton;
-    public Button reactivateButton;
-    public GameObject supervisorPasswordPanel;
+    [SerializeField] private GameObject superPanel;
+    [SerializeField] private Button suspendButton;
+    [SerializeField] private Button reactivateButton;
+    [SerializeField] private GameObject supervisorPasswordPanel;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - SUPERVISOR
+    // ══════════════════════════════════════════════════════════════════════════════
 
     [Header("Supervisor")]
-    public GameObject supervisorPrefab;
-    public Transform supervisorSpawnPoint;
-    public Transform supervisorEntryPoint;
-    public List<Transform> supervisorMiddlePath;
-    public Transform supervisorExitPoint;
-    private GameObject currentSupervisor;
-    
-    [Header("Ticket")]
-    public GameObject ticketPrefab;
-    public GameObject ticketPrefab2;
-    public Transform ticketSpawnPoint;
-    public Transform ticketTargetPoint;
+    [SerializeField] private GameObject supervisorPrefab;
+    [SerializeField] private Transform supervisorSpawnPoint;
+    [SerializeField] private Transform supervisorEntryPoint;
+    [SerializeField] private List<Transform> supervisorMiddlePath;
+    [SerializeField] private Transform supervisorExitPoint;
 
-    [Header("Ticket S")]
-    public Transform ticketSFirst;
-    public Transform ticketSLast;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - TICKETS
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    private GameObject currentCustomer;
-    private Client currentClient;
-    private GameObject currentProduct;
-    private int scannedCount = 0;
-    private const int maxProducts = 4;
+    [Header("Ticket Suspensión")]
+    [SerializeField] private GameObject ticketPrefab;
+    [SerializeField] private Transform ticketSpawnPoint;
+    [SerializeField] private Transform ticketTargetPoint;
 
-    private List<DragObject> scannedProducts = new();
-    private int lastProductIndex = -1;
+    [Header("Ticket Reactivación")]
+    [SerializeField] private GameObject ticketPrefab2;
+    [SerializeField] private Transform ticketSFirst;
+    [SerializeField] private Transform ticketSLast;
 
-    private string savedProductText;
-    private string savedTotalText;
-    private string suspendedCustomerPrefabName;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ESTADO INTERNO - CLIENTE Y PRODUCTOS
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private GameObject _currentCustomer;
+    private Client _currentClient;
+    private CustomerMovement _currentMovement;
+    private GameObject _currentProduct;
+
+    private int _scannedCount = 0;
+    private const int MAX_PRODUCTS = 4;
+    private List<DragObject> _scannedProducts = new();
+    private int _lastProductIndex = -1;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ESTADO INTERNO - SUPERVISOR Y DATOS GUARDADOS
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private GameObject _currentSupervisor;
+    private string _savedProductText;
+    private string _savedTotalText;
+    private string _suspendedCustomerPrefabName;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS - LEÍDAS POR ADAPTER VÍA REFLECTION
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Contador de errores - El ActivityMetricsAdapter lee este campo.
+    /// Se incrementa en cada respuesta incorrecta de los diálogos.
+    /// </summary>
+    private int _errorCount = 0;
+
+    /// <summary>
+    /// Contador de aciertos - El ActivityMetricsAdapter puede leer este campo.
+    /// </summary>
+    private int _successCount = 0;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN DE CÁMARA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private const string CAM_START = "Iniciando Juego";
+    private const string CAM_CLIENT = "Cliente Camera";
+    private const string CAM_SUPER = "Actividad 4 Super";
+    private const string CAM_SUSPEND = "Actividad 4 Presionar Suspender";
+    private const string CAM_SUPERVISOR_1 = "Mirada Supervisor 1";
+    private const string CAM_SUPERVISOR_2 = "Mirada Supervisor 2";
+    private const string CAM_PASSWORD = "Actividad 4 Supervisor Contraseña";
+    private const string CAM_TICKET = "Actividad 4 Mirar Ticket";
+    private const string CAM_RESTORE = "Actividad 4 Restauracion";
+    private const string CAM_SUCCESS = "Actividad 4 Success";
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIFECYCLE
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void Initialize() { }
+
     public override void StartActivity()
     {
         base.StartActivity();
+
+        // Resetear métricas y estado
+        ResetMetrics();
+        ResetState();
+
+        // Regenerar productos disponibles
         RegenerateProductValues();
 
+        // Configurar scanner
         scanner.BindUI(this, activityProductsText, activityTotalPriceText, true);
 
+        // Obtener nombres de productos del pool
         productNames = ObjectPoolManager.Instance.GetAvailablePrefabNames(PoolTag.Producto).ToArray();
+
+        // Configurar comandos
         InitializeCommands();
-        UpdateInstructionOnce(0, () =>
-        {
-            SpawnCustomer();
-        });
+
+        // Iniciar flujo
+        UpdateInstructionOnce(0, SpawnCustomer);
     }
+
+    protected override void OnDisable()
+    {
+        base.OnDisable();
+        if (scanner != null) scanner.UnbindUI(this);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
 
     protected override void InitializeCommands()
     {
         base.InitializeCommands();
 
-        foreach (var button in superPressedButton) button.gameObject.SetActive(false);
-        foreach (var button in superPressedButton2) button.gameObject.SetActive(false);
+        // Desactivar botones de comando
+        foreach (var button in superPressedButton)
+            button.gameObject.SetActive(false);
+        foreach (var button in superPressedButton2)
+            button.gameObject.SetActive(false);
 
+        // Comando SUPER (para suspender)
         commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "SUPER",
             customAction = HandleSuperPressed,
-            requiredActivity = "Day4_ClientePrecioCambiado",
+            requiredActivity = "Day3_ClientePrecioCambiado",
             commandButtons = superPressedButton
         });
 
+        // Comando SUPER2 (para reactivar)
         commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "SUPER2",
             customAction = HandleSuperPressed2,
-            requiredActivity = "Day4_ClientePrecioCambiado",
+            requiredActivity = "Day3_ClientePrecioCambiado",
             commandButtons = superPressedButton2
         });
-
     }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private void ResetMetrics()
+    {
+        _errorCount = 0;
+        _successCount = 0;
+    }
+
+    private void ResetState()
+    {
+        _scannedCount = 0;
+        _scannedProducts.Clear();
+        _lastProductIndex = -1;
+        _savedProductText = "";
+        _savedTotalText = "";
+        _suspendedCustomerPrefabName = "";
+    }
+
+    private void RegisterError()
+    {
+        _errorCount++;
+        SoundManager.Instance.PlaySound("error");
+        Debug.Log($"[SuspensionReactivacion] Error registrado. Total: {_errorCount}");
+    }
+
+    private void RegisterSuccess()
+    {
+        _successCount++;
+        Debug.Log($"[SuspensionReactivacion] Acierto registrado. Total: {_successCount}");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 1: CLIENTE Y ESCANEO DE PRODUCTOS
+    // ══════════════════════════════════════════════════════════════════════════════
 
     private void SpawnCustomer()
     {
-        currentCustomer = customerSpawner.SpawnCustomer();
-        currentClient = currentCustomer.GetComponent<Client>();
+        _currentCustomer = customerSpawner.SpawnCustomer();
+        _currentClient = _currentCustomer.GetComponent<Client>();
+        _currentMovement = _currentCustomer.GetComponent<CustomerMovement>();
 
-        cameraController.MoveToPosition("Iniciando Juego", () =>
+        cameraController.MoveToPosition(CAM_START, () =>
         {
-            currentCustomer.GetComponent<CustomerMovement>().MoveToCheckout(() =>
+            _currentMovement.MoveToCheckout(() =>
             {
                 UpdateInstructionOnce(1, SpawnNextProduct);
             });
@@ -114,39 +288,84 @@ public class SuspensionReactivacion : ActivityBase
 
     private void SpawnNextProduct()
     {
-        if (scannedCount >= maxProducts) return;
+        if (_scannedCount >= MAX_PRODUCTS) return;
 
-        GameObject prefab = ObjectPoolManager.Instance.GetRandomPrefabFromPool(PoolTag.Producto, ref lastProductIndex);
+        GameObject prefab = ObjectPoolManager.Instance.GetRandomPrefabFromPool(PoolTag.Producto, ref _lastProductIndex);
         if (prefab == null) return;
 
-        currentProduct = ObjectPoolManager.Instance.GetFromPool(PoolTag.Producto, prefab.name);
-        if (currentProduct == null) return;
+        _currentProduct = ObjectPoolManager.Instance.GetFromPool(PoolTag.Producto, prefab.name);
+        if (_currentProduct == null) return;
 
-        currentProduct.transform.position = productSpawnPoint.position;
-        currentProduct.transform.rotation = prefab.transform.rotation;
-        currentProduct.transform.SetParent(null);
-        currentProduct.SetActive(true);
+        _currentProduct.transform.position = productSpawnPoint.position;
+        _currentProduct.transform.rotation = prefab.transform.rotation;
+        _currentProduct.transform.SetParent(null);
+        _currentProduct.SetActive(true);
 
-        DragObject drag = currentProduct.GetComponent<DragObject>();
+        DragObject drag = _currentProduct.GetComponent<DragObject>();
         drag?.SetOriginalPoolName(prefab.name);
+
+        // ✅ CRÍTICO: Suscribirse al evento OnScanned del producto
+        BindCurrentProduct(_currentProduct);
     }
 
-    public void RegisterProductScanned()
+    /// <summary>
+    /// Suscribe el evento OnScanned del DragObject para detectar cuando se escanea.
+    /// </summary>
+    private void BindCurrentProduct(GameObject product)
     {
-        if (currentProduct == null) return;
+        if (product == null) return;
 
-        DragObject drag = currentProduct.GetComponent<DragObject>();
-
+        DragObject drag = product.GetComponent<DragObject>();
         if (drag != null)
         {
-            scannedProducts.Add(drag);
+            drag.OnScanned -= OnProductScannedHandler;
+            drag.OnScanned += OnProductScannedHandler;
+        }
+    }
+
+    /// <summary>
+    /// Handler del evento OnScanned - se dispara cuando el producto pasa por el scanner.
+    /// </summary>
+    private void OnProductScannedHandler(DragObject dragObj)
+    {
+        if (dragObj == null) return;
+
+        // Desuscribirse para evitar llamadas duplicadas
+        dragObj.OnScanned -= OnProductScannedHandler;
+
+        // Registrar en el scanner (actualiza UI de productos y total)
+        if (scanner != null)
+        {
+            scanner.RegisterProductScan(dragObj);
         }
 
-        ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, currentProduct.name, currentProduct);
-        currentProduct = null;
-        scannedCount++;
+        // Continuar flujo
+        RegisterProductScanned();
+    }
 
-        if (scannedCount < maxProducts)
+    /// <summary>
+    /// Procesa el producto escaneado y spawnea el siguiente o continúa el flujo.
+    /// </summary>
+    private void RegisterProductScanned()
+    {
+        if (_currentProduct == null) return;
+
+        DragObject drag = _currentProduct.GetComponent<DragObject>();
+        if (drag != null)
+        {
+            _scannedProducts.Add(drag);
+        }
+
+        // Retornar producto al pool
+        string poolName = (drag != null && !string.IsNullOrEmpty(drag.OriginalPoolName))
+            ? drag.OriginalPoolName
+            : _currentProduct.name;
+
+        ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, poolName, _currentProduct);
+        _currentProduct = null;
+        _scannedCount++;
+
+        if (_scannedCount < MAX_PRODUCTS)
         {
             SpawnNextProduct();
         }
@@ -156,36 +375,41 @@ public class SuspensionReactivacion : ActivityBase
         }
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 2: CLIENTE SE VA (OLVIDA TARJETA)
+    // ══════════════════════════════════════════════════════════════════════════════
+
     private void TriggerClientComplaint()
     {
         UpdateInstructionOnce(2, () =>
         {
-            cameraController.MoveToPosition("Cliente Camera", () =>
+            cameraController.MoveToPosition(CAM_CLIENT, () =>
             {
                 DialogSystem.Instance.ShowClientDialog(
-                    currentClient,
+                    _currentClient,
                     "Ay no, olvidé mi tarjeta, necesito salir un momento.",
                     () =>
-                    {
-                        CustomerMovement movement = currentCustomer.GetComponent<CustomerMovement>();
-                        if (movement != null)
+                    {                      
+                        _suspendedCustomerPrefabName = _currentCustomer.name.Replace("(Clone)", "").Trim();
+
+                        _currentMovement.MoveToExit(() =>
                         {
-                            suspendedCustomerPrefabName = currentCustomer.name.Replace("(Clone)", "").Trim();
-                            movement.MoveToExit(() =>
+                            cameraController.MoveToPosition(CAM_SUPER, () =>
                             {
-                                cameraController.MoveToPosition("Actividad 4 Super", () =>
+                                UpdateInstructionOnce(3, () =>
                                 {
-                                    UpdateInstructionOnce(3, () => 
-                                    {
-                                        ActivateButtonWithSequence(superPressedButton, 0, HandleSuperPressed);
-                                    });                                  
+                                    ActivateButtonWithSequence(superPressedButton, 0, HandleSuperPressed);
                                 });
                             });
-                        }
+                        });
                     });
             });
-        });     
+        });
     }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 3: SUSPENDER CUENTA
+    // ══════════════════════════════════════════════════════════════════════════════
 
     public void HandleSuperPressed()
     {
@@ -193,54 +417,60 @@ public class SuspensionReactivacion : ActivityBase
         suspendButton.interactable = false;
         reactivateButton.interactable = false;
 
-        cameraController.MoveToPosition("Actividad 4 Presionar Suspender", () =>
+        cameraController.MoveToPosition(CAM_SUSPEND, () =>
         {
             UpdateInstructionOnce(4, () =>
             {
                 suspendButton.interactable = true;
                 reactivateButton.interactable = false;
+
                 suspendButton.onClick.RemoveAllListeners();
                 suspendButton.onClick.AddListener(() =>
                 {
                     superPanel.SetActive(false);
-                    SpawnSupervisor();
+                    SpawnSupervisor1();
                 });
             });
         });
-          
     }
 
-    private void SpawnSupervisor()
+    private void SpawnSupervisor1()
     {
-        GameObject supervisorGO = Instantiate(supervisorPrefab, supervisorSpawnPoint.position, supervisorPrefab.transform.rotation);
-        currentSupervisor = supervisorGO;
+        _currentSupervisor = Instantiate(supervisorPrefab, supervisorSpawnPoint.position, supervisorPrefab.transform.rotation);
 
-        SupervisorMovement movement = supervisorGO.GetComponent<SupervisorMovement>();
-
-        movement.entryPoint = supervisorEntryPoint;
-        movement.middlePath = supervisorMiddlePath;
-        movement.exitPoint = supervisorExitPoint;
-        movement.animator = supervisorGO.GetComponent<Animator>();
+        SupervisorMovement movement = _currentSupervisor.GetComponent<SupervisorMovement>();
+        ConfigureSupervisorMovement(movement);
 
         UpdateInstructionOnce(5, () =>
         {
-            cameraController.MoveToPosition("Mirada Supervisor 1", () =>
+            cameraController.MoveToPosition(CAM_SUPERVISOR_1, () =>
             {
                 movement.GoToEntryPoint(() =>
                 {
-                    cameraController.MoveToPosition("Mirada Supervisor 2", () =>
+                    cameraController.MoveToPosition(CAM_SUPERVISOR_2, () =>
                     {
-                        ShowSupervisorDialog();
+                        ShowSupervisorDialog1();
                     });
                 });
             });
-        });       
+        });
     }
 
-    private void ShowSupervisorDialog()
+    private void ConfigureSupervisorMovement(SupervisorMovement movement)
+    {
+        movement.entryPoint = supervisorEntryPoint;
+        movement.middlePath = supervisorMiddlePath;
+        movement.exitPoint = supervisorExitPoint;
+        movement.animator = _currentSupervisor.GetComponent<Animator>();
+    }
+
+    /// <summary>
+    /// Diálogo 1: Supervisor pregunta qué pasó (suspensión).
+    /// </summary>
+    private void ShowSupervisorDialog1()
     {
         DialogSystem.Instance.ShowClientDialog(
-            currentSupervisor.GetComponent<Client>(),
+            _currentSupervisor.GetComponent<Client>(),
             "¿Qué sucedió? Cuéntame.",
             () =>
             {
@@ -248,105 +478,120 @@ public class SuspensionReactivacion : ActivityBase
                     "¿Qué le debes decir a la supervisora?",
                     new List<string>
                     {
-                    "El cliente se fue, necesito suspender la cuenta",
-                    "Ese cliente está loco",
-                    "No entiendo qué quiere",
-                    "No sé para qué vino"
+                        "El cliente se fue, necesito suspender la cuenta",
+                        "Ese cliente está loco",
+                        "No entiendo qué quiere",
+                        "No sé para qué vino"
                     },
                     "El cliente se fue, necesito suspender la cuenta",
-                    OnCorrectSupervisorAnswer,
-                    OnWrongSupervisorAnswer
+                    OnCorrectSupervisorAnswer1,
+                    RegisterError
                 );
             });
     }
 
-    private void OnCorrectSupervisorAnswer()
+    private void OnCorrectSupervisorAnswer1()
     {
+        RegisterSuccess();
+
         DOVirtual.DelayedCall(0.5f, () =>
         {
             DialogSystem.Instance.ShowClientDialog(
-                currentSupervisor.GetComponent<Client>(),
+                _currentSupervisor.GetComponent<Client>(),
                 "Entiendo, lo haremos en este momento.",
                 () =>
                 {
                     DialogSystem.Instance.HideDialog();
-                    SupervisorMovement movement = currentSupervisor.GetComponent<SupervisorMovement>();
+                    SupervisorMovement movement = _currentSupervisor.GetComponent<SupervisorMovement>();
 
-                    cameraController.MoveToPosition("Mirada Supervisor 1", () =>
-                    {                      
+                    cameraController.MoveToPosition(CAM_SUPERVISOR_1, () =>
+                    {
                         movement.GoThroughMiddlePath(() =>
                         {
                             UpdateInstructionOnce(6, () =>
                             {
-                                cameraController.MoveToPosition("Actividad 4 Supervisor Contraseña", () =>
+                                cameraController.MoveToPosition(CAM_PASSWORD, () =>
                                 {
-                                    HandleChangePassword();
+                                    HandlePassword1();
                                 });
-                            });                           
+                            });
                         });
                     });
                 });
         });
     }
 
-    private void HandleChangePassword()
+    private void HandlePassword1()
     {
         UpdateInstructionOnce(7, () =>
         {
             supervisorPasswordPanel.SetActive(true);
+
             AnimatePasswordEntry(() =>
             {
-                SupervisorMovement movement = currentSupervisor.GetComponent<SupervisorMovement>();
+                SupervisorMovement movement = _currentSupervisor.GetComponent<SupervisorMovement>();
                 movement.GoToExit(() =>
                 {
                     movement.gameObject.SetActive(false);
                 });
+
+                // Guardar datos antes de limpiar
                 SaveData();
                 scanner.ClearUI();
-                supervisorPasswordPanel.SetActive(false);                
-                cameraController.MoveToPosition("Actividad 4 Mirar Ticket", () =>
-                {                  
+                supervisorPasswordPanel.SetActive(false);
+
+                cameraController.MoveToPosition(CAM_TICKET, () =>
+                {
                     UpdateInstructionOnce(8, () =>
                     {
-                        InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, HandleTicketDelivered);
+                        InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, OnSuspensionTicketDelivered);
                     });
                 });
-
             });
         });
     }
 
-    private void HandleTicketDelivered()
+    public void SaveData()
+    {
+        _savedProductText = activityProductsText.text;
+        _savedTotalText = activityTotalPriceText.text;
+    }
+
+    private void OnSuspensionTicketDelivered()
     {
         SoundManager.Instance.PlaySound("success");
 
-        if (string.IsNullOrEmpty(suspendedCustomerPrefabName)) return;
+        if (string.IsNullOrEmpty(_suspendedCustomerPrefabName)) return;
 
-        currentCustomer = customerSpawner.SpawnCustomerByName(suspendedCustomerPrefabName);
+        // Respawnear el mismo cliente
+        _currentCustomer = customerSpawner.SpawnCustomerByName(_suspendedCustomerPrefabName);
+        if (_currentCustomer == null) return;
 
-        if (currentCustomer == null) return;
+        _currentClient = _currentCustomer.GetComponent<Client>();
+        _currentMovement = _currentCustomer.GetComponent<CustomerMovement>();
 
-        currentClient = currentCustomer.GetComponent<Client>();
-
-        cameraController.MoveToPosition("Iniciando Juego", () =>
+        cameraController.MoveToPosition(CAM_START, () =>
         {
-            currentCustomer.GetComponent<CustomerMovement>().MoveToCheckout(() =>
+            _currentMovement.MoveToCheckout(() =>
             {
-                UpdateInstructionOnce(9, () =>
-                {
-                    ShowReactivationDialog();
-                });
-                
+                UpdateInstructionOnce(9, ShowReactivationDialog);
             });
         });
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 4: CLIENTE REGRESA - REACTIVAR CUENTA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Diálogo 2: Cliente regresa y pide reactivar.
+    /// </summary>
     private void ShowReactivationDialog()
     {
-        cameraController.MoveToPosition("Cliente Camera", () =>
+        cameraController.MoveToPosition(CAM_CLIENT, () =>
         {
             DialogSystem.Instance.ShowClientDialog(
-                currentClient,
+                _currentClient,
                 "Hola ya volví, fue super rápido, ¿podemos continuar?",
                 () =>
                 {
@@ -361,7 +606,7 @@ public class SuspensionReactivacion : ActivityBase
                         },
                         "Claro, déjeme reactivar su cuenta",
                         OnCorrectReactivationAnswer,
-                        OnWrongSupervisorAnswer
+                        RegisterError
                     );
                 });
         });
@@ -369,13 +614,15 @@ public class SuspensionReactivacion : ActivityBase
 
     private void OnCorrectReactivationAnswer()
     {
+        RegisterSuccess();
+
         UpdateInstructionOnce(10, () =>
         {
-            cameraController.MoveToPosition("Actividad 4 Super", () =>
+            cameraController.MoveToPosition(CAM_SUPER, () =>
             {
                 ActivateButtonWithSequence(superPressedButton2, 0, HandleSuperPressed2);
             });
-        });     
+        });
     }
 
     public void HandleSuperPressed2()
@@ -384,7 +631,7 @@ public class SuspensionReactivacion : ActivityBase
         reactivateButton.interactable = false;
         suspendButton.interactable = false;
 
-        cameraController.MoveToPosition("Actividad 4 Presionar Suspender", () =>
+        cameraController.MoveToPosition(CAM_SUSPEND, () =>
         {
             UpdateInstructionOnce(11, () =>
             {
@@ -400,25 +647,21 @@ public class SuspensionReactivacion : ActivityBase
             });
         });
     }
+
     private void SpawnSupervisor2()
     {
-        GameObject supervisorGO = Instantiate(supervisorPrefab, supervisorSpawnPoint.position, supervisorPrefab.transform.rotation);
-        currentSupervisor = supervisorGO;
+        _currentSupervisor = Instantiate(supervisorPrefab, supervisorSpawnPoint.position, supervisorPrefab.transform.rotation);
 
-        SupervisorMovement movement = supervisorGO.GetComponent<SupervisorMovement>();
-
-        movement.entryPoint = supervisorEntryPoint;
-        movement.middlePath = supervisorMiddlePath;
-        movement.exitPoint = supervisorExitPoint;
-        movement.animator = supervisorGO.GetComponent<Animator>();
+        SupervisorMovement movement = _currentSupervisor.GetComponent<SupervisorMovement>();
+        ConfigureSupervisorMovement(movement);
 
         UpdateInstructionOnce(12, () =>
         {
-            cameraController.MoveToPosition("Mirada Supervisor 1", () =>
+            cameraController.MoveToPosition(CAM_SUPERVISOR_1, () =>
             {
                 movement.GoToEntryPoint(() =>
                 {
-                    cameraController.MoveToPosition("Mirada Supervisor 2", () =>
+                    cameraController.MoveToPosition(CAM_SUPERVISOR_2, () =>
                     {
                         ShowSupervisorDialog2();
                     });
@@ -427,10 +670,13 @@ public class SuspensionReactivacion : ActivityBase
         });
     }
 
+    /// <summary>
+    /// Diálogo 3: Supervisor 2 pregunta qué pasó (reactivación).
+    /// </summary>
     private void ShowSupervisorDialog2()
     {
         DialogSystem.Instance.ShowClientDialog(
-            currentSupervisor.GetComponent<Client>(),
+            _currentSupervisor.GetComponent<Client>(),
             "¿Qué sucedió? Cuéntame.",
             () =>
             {
@@ -438,65 +684,67 @@ public class SuspensionReactivacion : ActivityBase
                     "¿Qué le debes decir a la supervisora?",
                     new List<string>
                     {
-                    "El cliente regresó, necesito reactivar la cuenta",
-                    "Ese cliente está loco",
-                    "No entiendo qué quiere",
-                    "No sé para qué vino"
+                        "El cliente regresó, necesito reactivar la cuenta",
+                        "Ese cliente está loco",
+                        "No entiendo qué quiere",
+                        "No sé para qué vino"
                     },
                     "El cliente regresó, necesito reactivar la cuenta",
                     OnCorrectSupervisorAnswer2,
-                    OnWrongSupervisorAnswer
+                    RegisterError
                 );
             });
     }
 
     private void OnCorrectSupervisorAnswer2()
     {
+        RegisterSuccess();
+
         DOVirtual.DelayedCall(0.5f, () =>
         {
             DialogSystem.Instance.ShowClientDialog(
-                currentSupervisor.GetComponent<Client>(),
+                _currentSupervisor.GetComponent<Client>(),
                 "Entiendo, lo haremos en este momento.",
                 () =>
                 {
                     DialogSystem.Instance.HideDialog();
-                    SupervisorMovement movement = currentSupervisor.GetComponent<SupervisorMovement>();
-                    cameraController.MoveToPosition("Mirada Supervisor 1", () =>
+                    SupervisorMovement movement = _currentSupervisor.GetComponent<SupervisorMovement>();
+
+                    cameraController.MoveToPosition(CAM_SUPERVISOR_1, () =>
                     {
                         movement.GoThroughMiddlePath(() =>
                         {
-                            cameraController.MoveToPosition("Actividad 4 Supervisor Contraseña", () =>
+                            cameraController.MoveToPosition(CAM_PASSWORD, () =>
                             {
-                                HandleChangePassword2();
+                                HandlePassword2();
                             });
                         });
                     });
                 });
-        });     
-
+        });
     }
 
-    private void HandleChangePassword2()
+    private void HandlePassword2()
     {
         UpdateInstructionOnce(13, () =>
         {
             supervisorPasswordPanel.SetActive(true);
+
             AnimatePasswordEntry(() =>
             {
-                SupervisorMovement movement = currentSupervisor.GetComponent<SupervisorMovement>();
-                movement.GoToExit(() => Debug.Log("Cliente se va"));
+                SupervisorMovement movement = _currentSupervisor.GetComponent<SupervisorMovement>();
+                movement.GoToExit(() => Debug.Log("Supervisor 2 se va"));
+
                 supervisorPasswordPanel.SetActive(false);
-                UpdateInstructionOnce(14, () =>
-                {
-                    SpawnReactivationTicket();
-                });
+
+                UpdateInstructionOnce(14, SpawnReactivationTicket);
             });
-        });       
+        });
     }
 
     private void SpawnReactivationTicket()
     {
-        cameraController.MoveToPosition("Actividad 4 Mirar Ticket", () =>
+        cameraController.MoveToPosition(CAM_TICKET, () =>
         {
             GameObject ticket = Instantiate(ticketPrefab2, ticketSFirst.position, ticketPrefab2.transform.rotation);
             ReactivateTicket ticketScript = ticket.GetComponent<ReactivateTicket>();
@@ -504,49 +752,67 @@ public class SuspensionReactivacion : ActivityBase
         });
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 5: RESTAURAR Y COMPLETAR
+    // ══════════════════════════════════════════════════════════════════════════════
+
     private void RestoreSuspendedData()
     {
-        cameraController.MoveToPosition("Actividad 4 Restauracion", () =>
+        cameraController.MoveToPosition(CAM_RESTORE, () =>
         {
-            activityProductsText.text = savedProductText;
-            activityTotalPriceText.text = savedTotalText;
+            // Restaurar textos guardados
+            activityProductsText.text = _savedProductText;
+            activityTotalPriceText.text = _savedTotalText;
 
             UpdateInstructionOnce(15, () =>
             {
-                currentCustomer.GetComponent<CustomerMovement>().MoveToExit();
-                    UpdateInstructionOnce(16, () =>
-                    {
-                        cameraController.MoveToPosition("Iniciando Juego", () =>
-                        {
-                            ActivityComplete();
-                        });
-                    });                 
+                _currentMovement.MoveToExit();
+
+                cameraController.MoveToPosition(CAM_START, () =>
+                {
+                    ActivityComplete();
+                });
             });
-        });       
+        });
     }
 
     private void ActivityComplete()
     {
         scanner.ClearUI();
         commandManager.commandList.Clear();
-        cameraController.MoveToPosition("Actividad 4 Success", () =>
+
+        cameraController.MoveToPosition(CAM_SUCCESS, () =>
         {
-            continueButton.onClick.RemoveAllListeners();
             SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
-            continueButton.onClick.AddListener(() =>
+
+            var adapter = GetComponent<ActivityMetricsAdapter>();
+
+            if (adapter != null)
             {
-                cameraController.MoveToPosition("Iniciando Juego");
-                CompleteActivity();
-            });
+                adapter.NotifyActivityCompleted();
+            }
+            else
+            {
+                ShowManualSuccessPanel();
+            }
         });
     }
 
-    public void SaveData()
+    private void ShowManualSuccessPanel()
     {
-        savedProductText = activityProductsText.text;
-        savedTotalText = activityTotalPriceText.text;
+        SoundManager.Instance.PlaySound("win");
+
+        continueButton.onClick.RemoveAllListeners();
+        continueButton.onClick.AddListener(() =>
+        {
+            cameraController.MoveToPosition(CAM_START);
+            CompleteActivity();
+        });
     }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // UTILIDADES
+    // ══════════════════════════════════════════════════════════════════════════════
 
     private void AnimatePasswordEntry(Action onComplete)
     {
@@ -572,19 +838,4 @@ public class SuspensionReactivacion : ActivityBase
             }
         });
     }
-
-    protected override void OnDisable()
-    {
-        base.OnDisable();
-        if (scanner != null) scanner.UnbindUI(this);
-    }
-
-
-    private void OnWrongSupervisorAnswer()
-    {
-        SoundManager.Instance.PlaySound("error");
-    }
-
-    protected override void Initialize() { }
-
 }

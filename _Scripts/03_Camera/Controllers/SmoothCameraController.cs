@@ -110,7 +110,6 @@ public class SmoothCameraController : MonoBehaviour
         {
             Transform firstChild = transform.GetChild(0);
             firstChild.name = currentTarget.name;
-            Debug.Log($"📷 Se cambió el nombre del hijo de la cámara a: {firstChild.name}");
         }
         else
         {

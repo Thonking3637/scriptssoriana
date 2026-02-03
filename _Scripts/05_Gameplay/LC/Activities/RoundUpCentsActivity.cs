@@ -4,13 +4,34 @@ using TMPro;
 using UnityEngine.UI;
 
 /// <summary>
-/// Actividad de Redondeo de Centavos - MIGRADA a LCPaymentActivityBase
+/// RoundUpCentsActivity - Actividad de Redondeo de Centavos
+/// MIGRADA a LCPaymentActivityBase
 /// 
-/// ANTES: ~380 líneas
-/// DESPUÉS: ~280 líneas
-/// REDUCCIÓN: ~26% (menos que otras porque tiene mucha lógica específica de diálogos)
+/// FLUJO:
+/// 1. Cliente llega con productos
+/// 2. Escanear productos → Subtotal (con centavos)
+/// 3. Mostrar panel de redondeo
+/// 4. Pregunta de opción múltiple sobre cómo preguntar el redondeo
+/// 5. Presionar Enter para confirmar
+/// 6. Pago con tarjeta
+/// 7. Ticket → Repetir 3 veces
 /// 
-/// Flujo de instrucciones:
+/// TIPO DE EVALUACIÓN: ComboMetric
+/// - Tiempo: Se mide desde que inicia la competencia
+/// - Errores: Se trackean respuestas incorrectas en el diálogo de redondeo
+/// - El adapter lee el campo _errorCount por reflection
+/// 
+/// CONFIGURACIÓN DEL ADAPTER:
+/// - evaluationType: ComboMetric
+/// - errorsFieldName: "_errorCount"
+/// - expectedTotal: 3 (3 intentos × 1 pregunta por intento)
+/// - weightAccuracy: 0.5
+/// - weightSpeed: 0.3
+/// - weightEfficiency: 0.2
+/// - idealTimeSeconds: calibrar jugando
+/// - maxAllowedErrors: 3
+/// 
+/// INSTRUCCIONES:
 /// 0 = Inicio (bienvenida)
 /// 1 = Subtotal
 /// 2 = Mostrar panel de redondeo
@@ -35,9 +56,30 @@ public class RoundUpCentsActivity : LCPaymentActivityBase
     [SerializeField] private List<Button> commandCardButtons;
     [SerializeField] private List<Button> enterLastClicking;
 
-    // Estado específico
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ESTADO INTERNO
+    // ══════════════════════════════════════════════════════════════════════════════
+
     private Client currentClientComponent;
     private float totalAmount;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS - LEÍDAS POR ADAPTER VÍA REFLECTION
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Contador de errores - El ActivityMetricsAdapter lee este campo.
+    /// Configurar en Inspector: errorsFieldName = "_errorCount"
+    /// Se incrementa cuando el usuario selecciona una respuesta incorrecta
+    /// en el diálogo de redondeo.
+    /// </summary>
+    private int _errorCount = 0;
+
+    /// <summary>
+    /// Contador de aciertos - El ActivityMetricsAdapter puede leer este campo.
+    /// Configurar en Inspector: successesFieldName = "_successCount"
+    /// </summary>
+    private int _successCount = 0;
 
     // ══════════════════════════════════════════════════════════════════════════════
     // IMPLEMENTACIÓN DE MÉTODOS ABSTRACTOS
@@ -68,6 +110,9 @@ public class RoundUpCentsActivity : LCPaymentActivityBase
 
     protected override void OnActivityInitialize()
     {
+        // Resetear métricas
+        ResetMetrics();
+
         // Desactivar botones específicos
         foreach (var button in enterButtons)
             button.gameObject.SetActive(false);
@@ -100,6 +145,38 @@ public class RoundUpCentsActivity : LCPaymentActivityBase
             requiredActivity = GetActivityCommandId(),
             commandButtons = enterButtons
         });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Resetea los contadores de métricas al iniciar la actividad.
+    /// </summary>
+    private void ResetMetrics()
+    {
+        _errorCount = 0;
+        _successCount = 0;
+    }
+
+    /// <summary>
+    /// Registra un error (respuesta incorrecta en el diálogo).
+    /// </summary>
+    private void RegisterError()
+    {
+        _errorCount++;
+        SoundManager.Instance.PlaySound("error");
+        Debug.Log($"[RoundUpCentsActivity] Error registrado. Total errores: {_errorCount}");
+    }
+
+    /// <summary>
+    /// Registra un acierto (respuesta correcta en el diálogo).
+    /// </summary>
+    private void RegisterSuccess()
+    {
+        _successCount++;
+        Debug.Log($"[RoundUpCentsActivity] Acierto registrado. Total aciertos: {_successCount}");
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
@@ -190,14 +267,16 @@ public class RoundUpCentsActivity : LCPaymentActivityBase
                         $"¿Desea donar la cantidad de ${roundUpText} a una fundación?",
                         () =>
                         {
-                            // Respuesta correcta
+                            // ✅ Respuesta correcta
+                            RegisterSuccess();
                             DialogSystem.Instance.HideDialog(false);
                             ActionEnterBeforeClient();
                         },
                         () =>
                         {
-                            // Respuesta incorrecta
-                            SoundManager.Instance.PlaySound("error");
+                            // ❌ Respuesta incorrecta
+                            RegisterError();
+                            // No avanza - el usuario debe seleccionar la correcta
                         }
                     );
                 });
@@ -329,7 +408,7 @@ public class RoundUpCentsActivity : LCPaymentActivityBase
         }
         else
         {
-            ShowActivityCompletePanel();
+            ActivityComplete();
         }
     }
 
@@ -344,9 +423,9 @@ public class RoundUpCentsActivity : LCPaymentActivityBase
     }
 
     /// <summary>
-    /// Muestra el panel de éxito.
+    /// Completa la actividad mostrando el resultado con el Adapter/UnifiedSummaryPanel.
     /// </summary>
-    private void ShowActivityCompletePanel()
+    private void ActivityComplete()
     {
         StopActivityTimer();
         ResetValues();
@@ -354,15 +433,19 @@ public class RoundUpCentsActivity : LCPaymentActivityBase
 
         cameraController.MoveToPosition(GetSuccessCameraPosition(), () =>
         {
-            continueButton.onClick.RemoveAllListeners();
             SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
 
-            continueButton.onClick.AddListener(() =>
+            var adapter = GetComponent<ActivityMetricsAdapter>();
+
+            if (adapter != null)
             {
-                cameraController.MoveToPosition(GetStartCameraPosition());
+                adapter.NotifyActivityCompleted();
+            }
+            else
+            {
+                Debug.LogWarning("[RoundUpCentsActivity] ActivityMetricsAdapter no encontrado. Completando sin estrellas.");
                 CompleteActivity();
-            });
+            }
         });
     }
 

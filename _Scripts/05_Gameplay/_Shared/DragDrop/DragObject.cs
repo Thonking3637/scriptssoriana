@@ -116,8 +116,6 @@ public class DragObject : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDr
 
                     OnScanned?.Invoke(this);
 
-                    Debug.Log($"{gameObject.name} escaneado correctamente.");
-
                     //ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, originalPoolName, gameObject);
                     return true;
                 }

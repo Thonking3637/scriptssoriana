@@ -76,7 +76,9 @@ public class ProgressService : MonoBehaviour
         string attemptId = Guid.NewGuid().ToString("N");
         onAttemptCreated?.Invoke(attemptId);
 
+#if UNITY_EDITOR
         Debug.Log($"[ProgressService] START Attempt {attemptId} {moduleId}/{activityId}");
+#endif
     }
 
     public void EndAttempt(
@@ -105,7 +107,9 @@ public class ProgressService : MonoBehaviour
                 if (!finalMistakes.HasValue)
                     finalMistakes = scoreData.errors;
 
+#if UNITY_EDITOR
                 Debug.Log($"[ProgressService] ✅ Métricas obtenidas de ScoringService: score={finalScore}, mistakes={finalMistakes}");
+#endif
             }
             else
             {
@@ -116,10 +120,12 @@ public class ProgressService : MonoBehaviour
         // ═══════════════════════════════════════════════════════════════════════════
         // PASO 2: Log con datos completos
         // ═══════════════════════════════════════════════════════════════════════════
+#if UNITY_EDITOR
         Debug.Log(
             $"[ProgressService] END Attempt {attemptId} | " +
             $"dur={durationSec}s completed={completed} score={finalScore} mistakes={finalMistakes}"
         );
+#endif
 
         // ═══════════════════════════════════════════════════════════════════════════
         // PASO 3: Guardar en Firebase si está habilitado
@@ -187,7 +193,9 @@ public class ProgressService : MonoBehaviour
             {
                 // Ya tenemos datos completos del ScoringService
                 await writer.RecordScoreAsync(session.Uid, scoreData);
+#if UNITY_EDITOR
                 Debug.Log($"[ProgressService] ✅ Score completo guardado en Firebase: {activityId}");
+#endif
             }
             else
             {
@@ -203,7 +211,9 @@ public class ProgressService : MonoBehaviour
                 };
 
                 await writer.RecordScoreAsync(session.Uid, minimalData);
+#if UNITY_EDITOR
                 Debug.Log($"[ProgressService] ✅ Score mínimo guardado en Firebase: {activityId}");
+#endif
             }
         }
         catch (Exception ex)
@@ -247,7 +257,9 @@ public class ProgressService : MonoBehaviour
         string store = (s != null && s.IsLoggedIn) ? s.StoreId : "-";
         string role = (s != null && s.IsLoggedIn) ? s.RoleId : "";
 
+#if UNITY_EDITOR
         Debug.Log($"[ProgressService] MEDAL Earned -> {activityId} | uid={uid} emp={emp} store={store} role={role}");
+#endif
     }
 
     // ═════════════════════════════════════════════════════════════════════════════
@@ -364,7 +376,9 @@ public class ProgressService : MonoBehaviour
             }
 
             await writer.RecordMedalAsync(s.Uid, activityId);
+#if UNITY_EDITOR
             Debug.Log($"[ProgressService] Medal written -> {activityId}");
+#endif
         }
         catch (Exception ex)
         {

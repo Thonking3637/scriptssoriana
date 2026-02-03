@@ -91,8 +91,8 @@ public class DialogSystem : MonoBehaviour
         clientCanvasGroup.transform.localScale = Vector3.one * 0.9f;
         clientCanvasGroup.gameObject.SetActive(true);
 
-        clientCanvasGroup.DOFade(1f, 0.3f);
-        clientCanvasGroup.transform.DOScale(1f, 0.3f).SetEase(Ease.OutBack);
+        clientCanvasGroup.DOFade(1f, 0.3f).SetLink(clientCanvasGroup.gameObject);
+        clientCanvasGroup.transform.DOScale(1f, 0.3f).SetEase(Ease.OutBack).SetLink(clientCanvasGroup.gameObject);
 
         instructionsManager?.HideInstructions();
 
@@ -130,8 +130,8 @@ public class DialogSystem : MonoBehaviour
         clientCanvasGroup.transform.localScale = Vector3.one * 0.9f;
         clientCanvasGroup.gameObject.SetActive(true);
 
-        clientCanvasGroup.DOFade(1f, 0.3f);
-        clientCanvasGroup.transform.DOScale(1f, 0.3f).SetEase(Ease.OutBack);
+        clientCanvasGroup.DOFade(1f, 0.3f).SetLink(clientCanvasGroup.gameObject);
+        clientCanvasGroup.transform.DOScale(1f, 0.3f).SetEase(Ease.OutBack).SetLink(clientCanvasGroup.gameObject);
 
         instructionsManager?.HideInstructions();
         clientNameText.text = customName;
@@ -180,8 +180,8 @@ public class DialogSystem : MonoBehaviour
         questionCanvasGroup.alpha = 0;
         questionCanvasGroup.transform.localScale = Vector3.one * 0.9f;
         questionCanvasGroup.gameObject.SetActive(true);
-        questionCanvasGroup.DOFade(1f, 0.3f);
-        questionCanvasGroup.transform.DOScale(1f, 0.3f).SetEase(Ease.OutBack);
+        questionCanvasGroup.DOFade(1f, 0.3f).SetLink(questionCanvasGroup.gameObject);
+        questionCanvasGroup.transform.DOScale(1f, 0.3f).SetEase(Ease.OutBack).SetLink(questionCanvasGroup.gameObject);
 
         foreach (Transform child in optionsContainer)
             Destroy(child.gameObject);
@@ -204,7 +204,7 @@ public class DialogSystem : MonoBehaviour
                 activeButtons.Add(btn);
 
                 go.transform.localScale = Vector3.zero;
-                go.transform.DOScale(Vector3.one, 0.25f).SetEase(Ease.OutBack);
+                go.transform.DOScale(Vector3.one, 0.25f).SetEase(Ease.OutBack).SetLink(go);
 
                 btn.onClick.AddListener(() =>
                 {
@@ -275,23 +275,27 @@ public class DialogSystem : MonoBehaviour
     {
         if (questionCanvasGroup != null)
         {
-            questionCanvasGroup.DOFade(0f, 0.25f);
-            questionCanvasGroup.transform.DOScale(0.9f, 0.25f).SetEase(Ease.InBack).OnComplete(() =>
-            {
-                questionCanvasGroup.gameObject.SetActive(false);
-                isActive = false;
-                if (showInstructions) instructionsManager?.ShowInstructions();
-            });
+            questionCanvasGroup.DOFade(0f, 0.25f).SetLink(questionCanvasGroup.gameObject);
+            questionCanvasGroup.transform.DOScale(0.9f, 0.25f).SetEase(Ease.InBack)
+                .SetLink(questionCanvasGroup.gameObject)
+                .OnComplete(() =>
+                {
+                    questionCanvasGroup.gameObject.SetActive(false);
+                    isActive = false;
+                    if (showInstructions) instructionsManager?.ShowInstructions();
+                });
         }
 
         if (clientCanvasGroup != null)
         {
-            clientCanvasGroup.DOFade(0f, 0.25f);
-            clientCanvasGroup.transform.DOScale(0.9f, 0.25f).SetEase(Ease.InBack).OnComplete(() =>
-            {
-                clientCanvasGroup.gameObject.SetActive(false);
-                if (showInstructions) instructionsManager?.ShowInstructions();
-            });
+            clientCanvasGroup.DOFade(0f, 0.25f).SetLink(clientCanvasGroup.gameObject);
+            clientCanvasGroup.transform.DOScale(0.9f, 0.25f).SetEase(Ease.InBack)
+                .SetLink(clientCanvasGroup.gameObject)
+                .OnComplete(() =>
+                {
+                    clientCanvasGroup.gameObject.SetActive(false);
+                    if (showInstructions) instructionsManager?.ShowInstructions();
+                });
         }
     }
 
@@ -302,9 +306,9 @@ public class DialogSystem : MonoBehaviour
             feedbackImage.color = color;
             feedbackFlashCanvasGroup.gameObject.SetActive(true);
             feedbackFlashCanvasGroup.alpha = 0f;
-            feedbackFlashCanvasGroup.DOFade(1f, 0.1f).OnComplete(() =>
+            feedbackFlashCanvasGroup.DOFade(1f, 0.1f).SetLink(feedbackFlashCanvasGroup.gameObject).OnComplete(() =>
             {
-                feedbackFlashCanvasGroup.DOFade(0f, 0.3f).OnComplete(() =>
+                feedbackFlashCanvasGroup.DOFade(0f, 0.3f).SetLink(feedbackFlashCanvasGroup.gameObject).OnComplete(() =>
                 {
                     feedbackFlashCanvasGroup.gameObject.SetActive(false);
                 });
@@ -424,6 +428,32 @@ public class DialogSystem : MonoBehaviour
                     }
                 );
             });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private void OnDisable()
+    {
+        // Matar DOTween en canvas groups del diálogo
+        if (clientCanvasGroup != null)
+        {
+            clientCanvasGroup.DOKill();
+            clientCanvasGroup.transform.DOKill();
+        }
+
+        if (questionCanvasGroup != null)
+        {
+            questionCanvasGroup.DOKill();
+            questionCanvasGroup.transform.DOKill();
+        }
+
+        if (feedbackFlashCanvasGroup != null)
+            feedbackFlashCanvasGroup.DOKill();
+
+        // Matar DOVirtual.DelayedCall pendientes
+        DOTween.Kill(this);
     }
 
 }

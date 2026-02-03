@@ -5,48 +5,170 @@ using UnityEngine.UI;
 using TMPro;
 using DG.Tweening;
 
+/// <summary>
+/// AngryClientCalmDown - Actividad de Calmar al Cliente Molesto
+/// 
+/// FLUJO EN 2 FASES:
+/// 
+/// FASE 1 - CALMAR AL CLIENTE (6 preguntas, 5 niveles de emoción):
+///   1. Cliente llega molesto (emoción = 0)
+///   2. Ronda de 6 preguntas con opciones
+///   3. Correcta: +1 emoción (bounce + success sound)
+///   4. Incorrecta: -1 emoción (shake + error sound) → AVANZA igual
+///   5. Al terminar las 6 preguntas:
+///      - Emoción >= 3 → Pasa a Fase 2
+///      - Emoción < 3  → Cliente se va → Adapter (0 estrellas) → Retry
+/// 
+/// FASE 2 - ESCANEO Y PAGO:
+///   1. Escanear 4 productos
+///   2. Subtotal → Pago con tarjeta → Ticket
+///   3. Adapter evalúa resultado (estrellas según accuracy)
+/// 
+/// NOTAS DE DISEÑO:
+/// - 6 preguntas + 5 niveles = margen de 1 error para llegar al máximo
+/// - Error AVANZA a siguiente pregunta (como en la vida real, no puedes "desdecirte")
+/// - El panel de emoción permanece visible durante toda la Fase 1
+/// - Tanto éxito como fallo usan el Adapter/UnifiedSummaryPanel
+/// 
+/// TIPO DE EVALUACIÓN: AccuracyBased
+/// - _successCount: Respuestas correctas
+/// - _errorCount: Respuestas incorrectas
+/// 
+/// SCORING (AccuracyBased = successes / (successes + errors) * 100):
+/// - 6/6 correct = 100% → ⭐⭐⭐
+/// - 5/6 correct = 83%  → ⭐⭐
+/// - 4/6 correct = 67%  → ⭐
+/// - 3/6 o menos = 50%  → 0 estrellas (+ fail si emoción < 3)
+/// 
+/// CONFIGURACIÓN DEL ADAPTER:
+/// - evaluationType: AccuracyBased
+/// - errorsFieldName: "_errorCount"
+/// - successesFieldName: "_successCount"
+/// - expectedTotal: 0
+/// - Star Thresholds: 100/80/60
+/// 
+/// INSTRUCCIONES:
+/// 0 = Inicio / Bienvenida
+/// 1 = Cliente llega molesto
+/// 2 = Responde las preguntas para calmar al cliente
+/// 3 = ¡Cliente calmado! Escanea los productos
+/// 4 = Presiona SUBTOTAL
+/// 5 = Comando de tarjeta
+/// 6 = Escribe el monto
+/// 7 = Entrega el ticket
+/// </summary>
 public class AngryClientCalmDown : ActivityBase
 {
-    [Header("Client & Product")]
-    public CustomerSpawner customerSpawner;
-    public Transform productSpawnPoint;
-    public ProductScanner scanner;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - CLIENTE Y PRODUCTOS
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("UI")]
-    public TextMeshProUGUI activityProductsText;
-    public TextMeshProUGUI activityTotalPriceText;
-    public TMP_InputField amountInputField;
-    public List<Button> numberButtons;
-    public List<Button> enterButtons;
-    public List<Button> enterLastClicking;
-    public List<Button> subtotalButtons;
-    public List<Button> commandCardButtons;
-    public GameObject ticketPrefab;
-    public Transform ticketSpawnPoint;
-    public Transform ticketTargetPoint;
-    public GameObject failPanel;
-    public Button retryButton;
-    public Button continueButton;
-    public Slider emotionSlider;
-    public Gradient emotionColorGradient;
-    public CanvasGroup emotionContainer;
-    public RectTransform emotionPanelTransform;
-    public Vector2 hiddenPosition;
-    public Vector2 visiblePosition;
+    [Header("Cliente y Productos")]
+    [SerializeField] private CustomerSpawner customerSpawner;
+    [SerializeField] private Transform productSpawnPoint;
+    [SerializeField] private ProductScanner scanner;
 
-    private GameObject currentCustomer;
-    private Client currentClient;
-    private GameObject currentProduct;
-    private int scannedCount = 0;
-    private int currentEmotionLevel = 0;
-    private int currentQuestionIndex = 0;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - UI
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    [Header("UI de Actividad")]
+    [SerializeField] private TextMeshProUGUI activityProductsText;
+    [SerializeField] private TextMeshProUGUI activityTotalPriceText;
+    [SerializeField] private TMP_InputField amountInputField;
+    [SerializeField] private Button continueButton;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - BOTONES
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    [Header("Botones")]
+    [SerializeField] private List<Button> numberButtons;
+    [SerializeField] private List<Button> enterButtons;
+    [SerializeField] private List<Button> enterLastClicking;
+    [SerializeField] private List<Button> subtotalButtons;
+    [SerializeField] private List<Button> commandCardButtons;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - TICKET
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    [Header("Ticket")]
+    [SerializeField] private GameObject ticketPrefab;
+    [SerializeField] private Transform ticketSpawnPoint;
+    [SerializeField] private Transform ticketTargetPoint;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - EMOTION SLIDER
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    [Header("Emotion Slider")]
+    [SerializeField] private Slider emotionSlider;
+    [SerializeField] private Gradient emotionColorGradient;
+    [SerializeField] private CanvasGroup emotionContainer;
+    [SerializeField] private RectTransform emotionPanelTransform;
+    [SerializeField] private Vector2 hiddenPosition;
+    [SerializeField] private Vector2 visiblePosition;
+
+    [Header("Emotion - Animación")]
+    [SerializeField] private float emotionAnimDuration = 0.4f;
+    [SerializeField] private float shakeIntensity = 12f;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONSTANTES
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private const string CAM_START = "Iniciando Juego";
+    private const string CAM_CLIENT = "Actividad 1 Cliente Camera";
+    private const string CAM_LOOK_CLIENT = "Actividad 1 Mirar Cliente";
+    private const string CAM_SUBTOTAL = "Actividad 2 Subtotal";
+    private const string CAM_AMOUNT = "Actividad 2 Escribir Monto";
+    private const string CAM_SUCCESS = "Actividad 2 Success";
+
+    private const int MAX_EMOTION_LEVEL = 5;
+    private const int MAX_PRODUCTS = 4;
+    private const int TOTAL_QUESTIONS = 6;
+    private const int MIN_EMOTION_TO_PASS = 3;
+    private const int MAX_CLIENT_ATTEMPTS = 3;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ESTADO INTERNO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private GameObject _currentCustomer;
+    private CustomerMovement _currentCustomerMovement;
+    private Client _currentClient;
+    private GameObject _currentProduct;
+    private int _scannedCount = 0;
+    private int _currentEmotionLevel = 0;
+    private int _currentQuestionIndex = 0;
+    private int _clientAttempt = 0;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS - LEÍDAS POR ADAPTER VÍA REFLECTION
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Respuestas incorrectas al diálogo.</summary>
+    private int _errorCount = 0;
+
+    /// <summary>Respuestas correctas al diálogo.</summary>
+    private int _successCount = 0;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIFECYCLE
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void Initialize() { }
 
     public override void StartActivity()
     {
         base.StartActivity();
 
-        RegisterCalmDownDialogs();
+        ResetAll();
+        // Cargar 6 preguntas aleatorias de la categoría "frustrated"
+        DialogPoolLoader.RegisterInDialogSystem("frustrated", TOTAL_QUESTIONS);
 
+        // Configurar scanner
         if (scanner != null)
         {
             scanner.UnbindUI(this);
@@ -58,21 +180,23 @@ public class AngryClientCalmDown : ActivityBase
 
         InitializeCommands();
 
-        currentQuestionIndex = 0;
+        // Estado inicial del emotion panel (oculto)
         emotionContainer.alpha = 0;
         emotionContainer.interactable = false;
         emotionContainer.blocksRaycasts = false;
         emotionPanelTransform.anchoredPosition = hiddenPosition;
         emotionSlider.value = 0;
 
+        // Iniciar
         UpdateInstructionOnce(0, () =>
         {
-            DOVirtual.DelayedCall(0.5f, () =>
-            {
-                SpawnCustomer();
-            });
+            DOVirtual.DelayedCall(0.5f, BeginPhase1);
         });
     }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN DE COMANDOS
+    // ══════════════════════════════════════════════════════════════════════════════
 
     protected override void InitializeCommands()
     {
@@ -99,27 +223,58 @@ public class AngryClientCalmDown : ActivityBase
             commandButtons = commandCardButtons
         });
     }
-    private void SpawnCustomer()
-    {
-        currentCustomer = customerSpawner.SpawnCustomer();
-        currentClient = currentCustomer.GetComponent<Client>();
 
-        cameraController.MoveToPosition("Iniciando Juego", () =>
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private void ResetMetrics()
+    {
+        _errorCount = 0;
+        _successCount = 0;
+    }
+
+    private void RegisterError()
+    {
+        _errorCount++;
+        Debug.Log($"[AngryClientCalmDown] Error registrado. Total: {_errorCount}");
+    }
+
+    private void RegisterSuccess()
+    {
+        _successCount++;
+        Debug.Log($"[AngryClientCalmDown] Acierto registrado. Total: {_successCount}");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ██  FASE 1: CALMAR AL CLIENTE (6 preguntas)
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Inicia Fase 1: Spawna cliente y empieza la ronda de preguntas.
+    /// </summary>
+    private void BeginPhase1()
+    {
+        _currentCustomer = customerSpawner.SpawnCustomer();
+        _currentClient = _currentCustomer.GetComponent<Client>();
+        _currentCustomerMovement = _currentCustomer.GetComponent<CustomerMovement>();
+
+        cameraController.MoveToPosition(CAM_START, () =>
         {
-            currentCustomer.GetComponent<CustomerMovement>().MoveToCheckout(() =>
+            _currentCustomerMovement.MoveToCheckout(() =>
             {
-                cameraController.MoveToPosition("Actividad 1 Cliente Camera", () =>
+                cameraController.MoveToPosition(CAM_CLIENT, () =>
                 {
-                    emotionContainer.alpha = 1;
+                    // Mostrar emotion slider UNA VEZ - permanece visible toda la Fase 1
+                    ShowEmotionContainer(true);
+                    emotionPanelTransform.DOAnchorPos(visiblePosition, 0.35f).SetEase(Ease.InOutQuad);
                     UpdateEmotionUI(0);
+
                     UpdateInstructionOnce(1, () =>
                     {
                         UpdateInstructionOnce(2, () =>
                         {
-                            DOVirtual.DelayedCall(0.5f, () =>
-                            {
-                                AskCurrentQuestion();
-                            });
+                            DOVirtual.DelayedCall(0.5f, AskNextQuestion);
                         });
                     });
                 });
@@ -127,113 +282,233 @@ public class AngryClientCalmDown : ActivityBase
         });
     }
 
-    private void AskCurrentQuestion(System.Action onComplete = null)
+    /// <summary>
+    /// Muestra la siguiente pregunta. Si ya no hay más, evalúa resultado.
+    /// </summary>
+    private void AskNextQuestion()
     {
-        var comments = DialogSystem.Instance.customerComments.FindAll(c => c.category == "calm_down");
+        var comments = DialogSystem.Instance.customerComments.FindAll(c => c.category == "frustrated");
 
-        if (currentQuestionIndex >= comments.Count || scannedCount >= 4)
+        // ¿Terminaron todas las preguntas?
+        if (_currentQuestionIndex >= comments.Count || _currentQuestionIndex >= TOTAL_QUESTIONS)
         {
-            onComplete?.Invoke();
+            EvaluatePhase1();
             return;
         }
 
-        var entry = comments[currentQuestionIndex];
+        var entry = comments[_currentQuestionIndex];
 
-        cameraController.MoveToPosition("Actividad 1 Cliente Camera", () =>
+        DialogSystem.Instance.ShowClientDialog(_currentClient, entry.clientText, () =>
         {
-            DialogSystem.Instance.ShowClientDialog(currentClient, entry.clientText, () =>
-            {
-                AnimateEmotionPanel(true);
-                emotionPanelTransform.DOAnchorPos(visiblePosition, 0.35f).SetEase(Ease.InOutQuad);
-                DialogSystem.Instance.ShowClientDialogWithOptions(
-                    entry.question,
-                    entry.options,
-                    entry.correctAnswer,
-                    () => OnCorrectAnswer(onComplete),
-                    OnWrongAnswer
-                );
-            });
+            DialogSystem.Instance.ShowClientDialogWithOptions(
+                entry.question,
+                entry.options,
+                entry.correctAnswer,
+                OnCorrectAnswer,
+                OnWrongAnswer
+            );
         });
     }
-    private void AnimateEmotionPanel(bool visible)
+
+    /// <summary>
+    /// Respuesta correcta: sube emoción, avanza a siguiente pregunta.
+    /// NOTA: DialogSystem YA llama HideDialog() y PlaySound("success"),
+    /// no duplicar aquí.
+    /// </summary>
+    private void OnCorrectAnswer()
     {
-        if (emotionContainer == null || emotionPanelTransform == null) return;
-        ShowEmotionContainer(visible);
+        RegisterSuccess();
+
+        _currentEmotionLevel = Mathf.Min(_currentEmotionLevel + 1, MAX_EMOTION_LEVEL);
+        AnimateEmotionTo(_currentEmotionLevel);
+
+        _currentQuestionIndex++;
+
+        // DialogSystem ya llamó HideDialog(false) → isActive se resetea en 0.25s
+        // Esperar lo suficiente y mostrar siguiente pregunta
+        DOVirtual.DelayedCall(1.0f, AskNextQuestion);
     }
 
-    private void OnCorrectAnswer(System.Action onComplete = null)
-    {
-        currentEmotionLevel = Mathf.Min(currentEmotionLevel + 1, 5);
-        emotionPanelTransform.DOAnchorPos(hiddenPosition, 0.35f).SetEase(Ease.InOutQuad);
-        AnimateEmotionPanel(true);
-        UpdateEmotionUI(currentEmotionLevel);
-        currentQuestionIndex++;
-
-        if (currentQuestionIndex <= 4 && scannedCount < 4)
-        {
-            cameraController.MoveToPosition("Iniciando Juego", () =>
-            {
-                UpdateInstructionOnce(3, () =>
-                {
-                    SpawnNextProduct();
-                    onComplete?.Invoke();
-                });
-            });
-            return;
-        }
-
-        onComplete?.Invoke();
-    }
-
-
+    /// <summary>
+    /// Respuesta incorrecta: baja emoción, shake, AVANZA a siguiente pregunta.
+    /// NOTA: DialogSystem YA llama PlaySound("error"), no duplicar.
+    /// DialogSystem NO llama HideDialog en error, debemos hacerlo nosotros.
+    /// </summary>
     private void OnWrongAnswer()
     {
-        currentEmotionLevel = Mathf.Max(0, currentEmotionLevel - 1);
-        print(currentEmotionLevel);
-        UpdateEmotionUI(currentEmotionLevel);
-    }
+        RegisterError();
 
-    private void SpawnNextProduct()
-    {
-        if (scannedCount < 4)
+        _currentEmotionLevel = Mathf.Max(0, _currentEmotionLevel - 1);
+        AnimateEmotionTo(_currentEmotionLevel);
+
+        // Feedback visual: shake del panel de emoción
+        if (emotionPanelTransform != null)
         {
-            GameObject product = GetPooledProduct(scannedCount % productNames.Length, productSpawnPoint);
-            if (product != null)
-            {
-                product.SetActive(true);
-                currentProduct = product;
-
-                BindCurrentProduct();
-            }
-        }
-    }
-
-    public void RegisterProductScanned()
-    {
-        if (currentProduct != null)
-        {
-            var drag = currentProduct.GetComponent<DragObject>();
-            string poolName =
-                (drag != null && !string.IsNullOrEmpty(drag.OriginalPoolName))
-                    ? drag.OriginalPoolName
-                    : currentProduct.name;
-
-            ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, poolName, currentProduct);
-            currentProduct = null;
+            emotionPanelTransform.DOShakeAnchorPos(0.3f, shakeIntensity, 15)
+                .SetEase(Ease.OutQuad);
         }
 
-        scannedCount++;
+        _currentQuestionIndex++;
 
-        if (scannedCount < 4)
+        // Forzar cierre del diálogo (DialogSystem NO lo hace en error)
+        // Esto resetea isActive después de 0.25s de animación
+        DialogSystem.Instance.HideDialog(false);
+
+        // Esperar a que HideDialog termine (0.25s fade) + margen
+        DOVirtual.DelayedCall(1.0f, AskNextQuestion);
+    }
+
+    /// <summary>
+    /// Evalúa si el cliente fue calmado suficiente para pasar a Fase 2.
+    /// Si falla: el cliente se va y llega uno nuevo (máximo 3 intentos).
+    /// Si pierde los 3: Adapter muestra resultado final (score bajo).
+    /// NOTA: El diálogo ya fue cerrado por OnCorrectAnswer/OnWrongAnswer.
+    /// </summary>
+    private void EvaluatePhase1()
+    {
+        if (_currentEmotionLevel >= MIN_EMOTION_TO_PASS)
         {
-            cameraController.MoveToPosition("Actividad 1 Cliente Camera", () =>
-            {
-                AskCurrentQuestion();
-            });
+            // ✅ Cliente calmado → Diálogo de transición y pasar a escaneo
+            HideEmotionPanel();
+
+            DialogSystem.Instance.ShowClientDialog(
+                _currentClient,
+                "Gracias por tu paciencia, ya me siento mejor.",
+                () =>
+                {
+                    DialogSystem.Instance.HideDialog();
+                    BeginPhase2();
+                });
         }
         else
         {
-            cameraController.MoveToPosition("Actividad 2 Subtotal", () =>
+            // ❌ Cliente aún molesto → Se va
+            _clientAttempt++;
+
+            DialogSystem.Instance.ShowClientDialog(
+                _currentClient,
+                "¡No me convences! Me voy a otra caja.",
+                () =>
+                {
+                    DialogSystem.Instance.HideDialog();
+                    _currentCustomerMovement.MoveToExit();
+
+                    if (_clientAttempt < MAX_CLIENT_ATTEMPTS)
+                    {
+                        // Aún quedan intentos → Llega nuevo cliente
+                        DOVirtual.DelayedCall(1.5f, SpawnNextClient);
+                    }
+                    else
+                    {
+                        // Se acabaron los intentos → Adapter muestra resultado
+                        HideEmotionPanel();
+                        DOVirtual.DelayedCall(1.5f, ShowActivityComplete);
+                    }
+                });
+        }
+    }
+
+    /// <summary>
+    /// Spawna un nuevo cliente después de que el anterior se fue.
+    /// Resetea emoción y preguntas, pero conserva las métricas acumuladas.
+    /// </summary>
+    private void SpawnNextClient()
+    {
+        // Resetear estado de la ronda (NO las métricas)
+        _currentEmotionLevel = 0;
+        _currentQuestionIndex = 0;
+        UpdateEmotionUI(0);
+
+        // Resetear índice de diálogos para reusar las preguntas
+        DialogSystem.Instance.ResetCategoryIndex("frustrated");
+
+        // Spawnar nuevo cliente
+        _currentCustomer = customerSpawner.SpawnCustomer();
+        _currentClient = _currentCustomer.GetComponent<Client>();
+        _currentCustomerMovement = _currentCustomer.GetComponent<CustomerMovement>();
+
+        cameraController.MoveToPosition(CAM_START, () =>
+        {
+            _currentCustomerMovement.MoveToCheckout(() =>
+            {
+                cameraController.MoveToPosition(CAM_CLIENT, () =>
+                {
+                    UpdateEmotionUI(0);
+
+                    // Mostrar diálogo del nuevo cliente
+                    DialogSystem.Instance.ShowClientDialog(
+                        _currentClient,
+                        "A ver si tú sí me atiendes bien...",
+                        () =>
+                        {
+                            DialogSystem.Instance.HideDialog(false);
+                            DOVirtual.DelayedCall(0.5f, AskNextQuestion);
+                        });
+                });
+            });
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ██  FASE 2: ESCANEO Y PAGO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Inicia Fase 2: Cliente calmado, ahora escanear productos.
+    /// </summary>
+    private void BeginPhase2()
+    {
+        _scannedCount = 0;
+
+        cameraController.MoveToPosition(CAM_START, () =>
+        {
+            UpdateInstructionOnce(3, SpawnNextProduct);
+        });
+    }
+
+    /// <summary>
+    /// Spawna el siguiente producto para escanear.
+    /// </summary>
+    private void SpawnNextProduct()
+    {
+        if (_scannedCount >= MAX_PRODUCTS) return;
+
+        GameObject product = GetPooledProduct(_scannedCount % productNames.Length, productSpawnPoint);
+        if (product != null)
+        {
+            product.SetActive(true);
+            _currentProduct = product;
+            BindCurrentProduct();
+        }
+    }
+
+    /// <summary>
+    /// Registra el producto escaneado y decide si continuar o ir al subtotal.
+    /// </summary>
+    public void RegisterProductScanned()
+    {
+        // Devolver producto al pool
+        if (_currentProduct != null)
+        {
+            var drag = _currentProduct.GetComponent<DragObject>();
+            string poolName = (drag != null && !string.IsNullOrEmpty(drag.OriginalPoolName))
+                ? drag.OriginalPoolName
+                : _currentProduct.name;
+
+            ObjectPoolManager.Instance.ReturnToPool(PoolTag.Producto, poolName, _currentProduct);
+            _currentProduct = null;
+        }
+
+        _scannedCount++;
+
+        if (_scannedCount < MAX_PRODUCTS)
+        {
+            SpawnNextProduct();
+        }
+        else
+        {
+            // Todos escaneados → Subtotal
+            cameraController.MoveToPosition(CAM_SUBTOTAL, () =>
             {
                 UpdateInstructionOnce(4, () =>
                 {
@@ -244,6 +519,9 @@ public class AngryClientCalmDown : ActivityBase
         }
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // PAGO CON TARJETA
+    // ══════════════════════════════════════════════════════════════════════════════
 
     public void HandleSubTotal()
     {
@@ -254,20 +532,20 @@ public class AngryClientCalmDown : ActivityBase
 
         SoundManager.Instance.PlaySound("success");
 
-        cameraController.MoveToPosition("Actividad 1 Cliente Camera", () =>
+        cameraController.MoveToPosition(CAM_CLIENT, () =>
         {
             DialogSystem.Instance.ShowClientDialog(
                 "Tu",
-                dialog: "Disculpe, ¿Cuál sera su metodo de pago?",
+                dialog: "Disculpe, ¿cuál será su método de pago?",
                 onComplete: () =>
                 {
                     DialogSystem.Instance.ShowClientDialog(
-                        currentClient,
-                        dialog: "Con tarjeta, apurese",
+                        _currentClient,
+                        dialog: "Con tarjeta, por favor.",
                         onComplete: () =>
                         {
                             DialogSystem.Instance.HideDialog(false);
-                            cameraController.MoveToPosition("Actividad 2 Subtotal", () =>
+                            cameraController.MoveToPosition(CAM_SUBTOTAL, () =>
                             {
                                 UpdateInstructionOnce(5);
                                 ActivateCommandButtons(commandCardButtons);
@@ -280,13 +558,10 @@ public class AngryClientCalmDown : ActivityBase
 
     public void HandleEnterAmount()
     {
-        AskCurrentQuestion(() =>
+        cameraController.MoveToPosition(CAM_SUBTOTAL, () =>
         {
-            cameraController.MoveToPosition("Actividad 2 Subtotal", () =>
-            {
-                float totalAmount = GetTotalAmount(activityTotalPriceText);
-                ActivateAmountInput(totalAmount);
-            });
+            float totalAmount = GetTotalAmount(activityTotalPriceText);
+            ActivateAmountInput(totalAmount);
         });
     }
 
@@ -294,7 +569,7 @@ public class AngryClientCalmDown : ActivityBase
     {
         SoundManager.Instance.PlaySound("success");
 
-        cameraController.MoveToPosition("Actividad 2 Escribir Monto");
+        cameraController.MoveToPosition(CAM_AMOUNT);
 
         if (amountInputField != null)
         {
@@ -308,123 +583,145 @@ public class AngryClientCalmDown : ActivityBase
         List<Button> selectedButtons = GetButtonsForAmount(amountString, numberButtons);
 
         foreach (var button in numberButtons)
-        {
             button.gameObject.SetActive(false);
-        }
+
         UpdateInstructionOnce(6);
         ActivateButtonWithSequence(selectedButtons, 0, () =>
         {
-            ActivateButtonWithSequence(enterLastClicking, 0, () =>
+            ActivateButtonWithSequence(enterLastClicking, 0, MoveClientAndGenerateTicket);
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // TICKET Y FINALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private void MoveClientAndGenerateTicket()
+    {
+        cameraController.MoveToPosition(CAM_LOOK_CLIENT, () =>
+        {
+            if (_currentCustomerMovement != null)
             {
-                AskCurrentQuestion();
-                cameraController.MoveToPosition("Actividad 1 Mirar Cliente", () =>
+                _currentCustomerMovement.MoveToPinEntry(() =>
                 {
-                    CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-                    if (customerMovement != null)
+                    UpdateInstructionOnce(7, () =>
                     {
-                        customerMovement.MoveToPinEntry(() =>
-                        {
-                            UpdateInstructionOnce(7, () =>
-                            {
-                                InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, HandleTicketDelivered);
-                            });
-                        });
-                    }
+                        InstantiateTicket(ticketPrefab, ticketSpawnPoint, ticketTargetPoint, HandleTicketDelivered);
+                    });
                 });
-            });
+            }
         });
     }
 
     private void HandleTicketDelivered()
     {
         SoundManager.Instance.PlaySound("success");
+        _currentCustomerMovement?.MoveToExit();
 
-        CustomerMovement customerMovement = currentCustomer.GetComponent<CustomerMovement>();
-        customerMovement.MoveToExit();
-
-        EndActivityCheck();
+        ShowActivityComplete();
     }
 
-    private void EndActivityCheck()
+    /// <summary>
+    /// Muestra el resultado usando el Adapter.
+    /// Se usa tanto para éxito como para fallo (el score determina las estrellas).
+    /// </summary>
+    private void ShowActivityComplete()
     {
-        AnimateEmotionPanel(false);
+        if (scanner != null)
+            scanner.ClearUI();
 
-        if (currentEmotionLevel >= 4)
-        {
-            ActivityComplete();
-        }
-        else
-        {
-            ShowFailPanel();
-        }
-    }
-
-    private void ActivityComplete()
-    {
-        scanner.ClearUI();
         commandManager.commandList.Clear();
-        cameraController.MoveToPosition("Actividad 2 Success", () =>
+
+        cameraController.MoveToPosition(CAM_SUCCESS, () =>
         {
-            continueButton.onClick.RemoveAllListeners();
             SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
-            continueButton.onClick.AddListener(() =>
+
+            var adapter = GetComponent<ActivityMetricsAdapter>();
+
+            if (adapter != null)
             {
-                cameraController.MoveToPosition("Iniciando Juego");
-                CompleteActivity();
+                adapter.NotifyActivityCompleted();
+            }
+            else
+            {
+                ShowManualSuccessPanel();
+            }
+        });
+    }
+
+    /// <summary>
+    /// Panel de éxito manual (fallback sin Adapter).
+    /// </summary>
+    private void ShowManualSuccessPanel()
+    {
+        SoundManager.Instance.PlaySound("win");
+
+        continueButton.onClick.RemoveAllListeners();
+        continueButton.onClick.AddListener(() =>
+        {
+            cameraController.MoveToPosition(CAM_START);
+            CompleteActivity();
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // EMOTION SLIDER - ANIMACIONES
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Anima el slider de emoción suavemente al nivel indicado.
+    /// OutBack al subir (bounce satisfactorio), OutCubic al bajar.
+    /// </summary>
+    private void AnimateEmotionTo(int level)
+    {
+        if (emotionSlider == null) return;
+
+        emotionSlider.DOKill();
+
+        Ease ease = level > emotionSlider.value ? Ease.OutBack : Ease.OutCubic;
+
+        emotionSlider.DOValue(level, emotionAnimDuration).SetEase(ease)
+            .OnUpdate(() =>
+            {
+                float normalized = emotionSlider.value / (float)MAX_EMOTION_LEVEL;
+                var fillImage = emotionSlider.fillRect.GetComponent<Image>();
+                if (fillImage != null && emotionColorGradient != null)
+                {
+                    fillImage.color = emotionColorGradient.Evaluate(normalized);
+                }
             });
-        });
     }
 
-    private void ShowFailPanel()
-    {
-        AnimateEmotionPanel(false);
-        failPanel.SetActive(true);
-        retryButton.onClick.RemoveAllListeners();
-        retryButton.onClick.AddListener(() => {
-            cameraController.MoveToPosition("Iniciando Juego");
-            failPanel.SetActive(false);
-            RestartActivity();
-        });
-    }
-
-    private void RestartActivity()
-    {
-        ResetValues();
-        DialogSystem.Instance.customerComments.RemoveAll(c => c.category == "calm_down");
-        DialogSystem.Instance.ResetCategoryIndex("calm_down");
-        StartActivity();
-    }
-
-    private void ResetValues()
-    {
-        scannedCount = 0;
-        currentEmotionLevel = 0;
-        currentQuestionIndex = 0;
-        UpdateEmotionUI(0);
-        scanner.ClearUI();
-    }
-
+    /// <summary>
+    /// Actualiza el slider inmediatamente (sin animación). Solo para reset.
+    /// </summary>
     private void UpdateEmotionUI(int level)
     {
-        if (emotionSlider != null)
+        if (emotionSlider == null) return;
+
+        emotionSlider.value = level;
+        float normalized = level / (float)MAX_EMOTION_LEVEL;
+        var fillImage = emotionSlider.fillRect.GetComponent<Image>();
+        if (fillImage != null && emotionColorGradient != null)
         {
-            emotionSlider.value = level;
-            emotionSlider.fillRect.GetComponent<Image>().color = emotionColorGradient.Evaluate(level / 4f);
+            fillImage.color = emotionColorGradient.Evaluate(normalized);
         }
     }
-    public void OnNumberButtonPressed(string number)
+
+    /// <summary>
+    /// Oculta el panel de emoción con animación.
+    /// </summary>
+    private void HideEmotionPanel()
     {
-        if (amountInputField != null)
-        {
-            amountInputField.text += number;
-        }
+        if (emotionPanelTransform != null)
+            emotionPanelTransform.DOAnchorPos(hiddenPosition, 0.35f).SetEase(Ease.InOutQuad);
+
+        ShowEmotionContainer(false);
     }
 
     private void ShowEmotionContainer(bool visible)
     {
         if (emotionContainer == null) return;
-        StopAllCoroutines();
         StartCoroutine(FadeEmotionContainer(visible));
     }
 
@@ -448,93 +745,40 @@ public class AngryClientCalmDown : ActivityBase
         emotionContainer.blocksRaycasts = visible;
     }
 
-    private void RegisterCalmDownDialogs()
-    {
-        DialogSystem.Instance.customerComments.RemoveAll(c => c.category == "calm_down");
+    // ══════════════════════════════════════════════════════════════════════════════
+    // RESET Y LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
 
-        DialogSystem.Instance.customerComments.AddRange(new List<CustomerComment>
-        {
-            new CustomerComment
-            {
-                category = "calm_down",
-                clientText = "Hoy todo me ha salido mal, ojalá al menos tú no me falles.",
-                question = "¿Cómo deberías responder?",
-                options = new List<string>
-                {
-                    "Haré todo lo posible para atenderle bien",
-                    "No es mi problema",
-                    "Todos tenemos días malos",
-                    "¿Y eso qué tiene que ver conmigo?"
-                },
-                correctAnswer = "Haré todo lo posible para atenderle bien"
-            },
-            new CustomerComment
-            {
-                category = "calm_down",
-                clientText = "Oye, ¿por qué no abren más cajas? Están súper lentos.",
-                question = "¿Cómo deberías responder?",
-                options = new List<string>
-                {
-                    "No se preocupe, vamos a hacer esto muy rápido.",
-                    "Entonces no venga",
-                    "Eso no es culpa mía",
-                    "A mí tampoco me gusta estar aquí"
-                },
-                correctAnswer = "No se preocupe, vamos a hacer esto muy rápido."
-            },
-            new CustomerComment
-            {
-                category = "calm_down",
-                clientText = "¿Por qué siempre me toca el peor día?",
-                question = "¿Cómo deberías responder?",
-                options = new List<string>
-                {
-                    "Lamento que esté teniendo un mal día, haré mi parte para ayudar",
-                    "Eso no tiene nada que ver conmigo",
-                    "Porque así es la vida",
-                    "Yo también estoy harto"
-                },
-                correctAnswer = "Lamento que esté teniendo un mal día, haré mi parte para ayudar"
-            },
-            new CustomerComment
-            {
-                category = "calm_down",
-                clientText = "Espero que al menos tú hagas bien tu trabajo.",
-                question = "¿Cómo deberías responder?",
-                options = new List<string>
-                {
-                    "Por supuesto, haré lo mejor posible",
-                    "¿Insinúa que no lo hago?",
-                    "Veremos si puedo",
-                    "Eso depende de usted"
-                },
-                correctAnswer = "Por supuesto, haré lo mejor posible"
-            },
-            new CustomerComment
-            {
-                category = "calm_down",
-                clientText = "Ya estoy cansado de todo esto, apúrate.",
-                question = "¿Cómo deberías responder?",
-                options = new List<string>
-                {
-                    "Entiendo, iré lo más rápido que pueda",
-                    "Si está cansado, no es mi culpa",
-                    "No me presione",
-                    "Entonces váyase"
-                },
-                correctAnswer = "Entiendo, iré lo más rápido que pueda"
-            }
-        });
+    private void ResetAll()
+    {
+        _scannedCount = 0;
+        _currentEmotionLevel = 0;
+        _currentQuestionIndex = 0;
+        _clientAttempt = 0;
+
+        if (emotionSlider != null)
+            emotionSlider.DOKill();
+
+        UpdateEmotionUI(0);
+
+        if (scanner != null)
+            scanner.ClearUI();
+
+        ResetMetrics();
     }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // PRODUCTOS - BINDING
+    // ══════════════════════════════════════════════════════════════════════════════
 
     private void BindCurrentProduct()
     {
-        if (currentProduct == null) return;
+        if (_currentProduct == null) return;
 
-        var drag = currentProduct.GetComponent<DragObject>();
+        var drag = _currentProduct.GetComponent<DragObject>();
         if (drag == null) return;
 
-        drag.OnScanned -= OnProductScanned; // anti x2 por pool
+        drag.OnScanned -= OnProductScanned;
         drag.OnScanned += OnProductScanned;
     }
 
@@ -548,5 +792,37 @@ public class AngryClientCalmDown : ActivityBase
 
         RegisterProductScanned();
     }
-    protected override void Initialize() { }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // UTILIDADES
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    public void OnNumberButtonPressed(string number)
+    {
+        if (amountInputField != null)
+        {
+            amountInputField.text += number;
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void OnDisable()
+    {
+        base.OnDisable();
+
+        // Limpiar DOTween del emotion slider
+        if (emotionSlider != null)
+            emotionSlider.DOKill();
+
+        if (emotionPanelTransform != null)
+            emotionPanelTransform.DOKill();
+
+        // Limpiar scanner
+        if (scanner != null)
+            scanner.UnbindUI(this);
+    }
+
 }

@@ -20,12 +20,12 @@ public class CashRegisterActivationActivity : ActivityBase
 
     [Header("Configuración de Material")]
     public MeshRenderer objectToChangeMaterial;
-    public Material newMaterial; 
+    public Material newMaterial;
     public int materialIndex = 3;
 
     [Header("Brillo (URP)")]
-    [Range(0, 1f)] public float shinySmoothness = 0.9f; 
-    [Range(0, 1f)] public float shinyMetallic = 0.0f;  
+    [Range(0, 1f)] public float shinySmoothness = 0.9f;
+    [Range(0, 1f)] public float shinyMetallic = 0.0f;
     [Min(0f)] public float emissionIntensity = 2.5f;
     public float tweenDuration = 0.5f;
 
@@ -49,7 +49,7 @@ public class CashRegisterActivationActivity : ActivityBase
             {
                 cameraController.MoveToPosition("Vista Botonera", () =>
                 {
-                    UpdateInstructionOnce(1,() =>
+                    UpdateInstructionOnce(1, () =>
                     {
                         interactionButton.SetActive(true);
                     });
@@ -69,12 +69,12 @@ public class CashRegisterActivationActivity : ActivityBase
                 SoundManager.Instance.PlaySound("success");
                 UpdateInstructionOnce(2, () =>
                 {
-                    cameraController.MoveToPosition("Actividad Login Botones",() =>
+                    cameraController.MoveToPosition("Actividad Login Botones", () =>
                     {
                         UpdateInstructionOnce(3, () =>
                         {
                             AnimateButtonsSequentiallyWithActivation(commandButtons);
-                        });                        
+                        });
                     });
                 });
             });
@@ -140,11 +140,11 @@ public class CashRegisterActivationActivity : ActivityBase
                 usernameField.DeactivateInputField();
                 usernameField.ActivateInputField();
 
-                AnimateButtonsSequentiallyWithActivation(loginButtons, () => 
+                AnimateButtonsSequentiallyWithActivation(loginButtons, () =>
                 {
                     LoginHandle();
                 });
-            });      
+            });
         });
     }
     public void LoginHandle()
@@ -159,7 +159,7 @@ public class CashRegisterActivationActivity : ActivityBase
             {
                 PasswordHandle();
             });
-        });       
+        });
     }
 
     public void PasswordHandle()
@@ -185,5 +185,14 @@ public class CashRegisterActivationActivity : ActivityBase
             Debug.LogError("❌ NO HAY ADAPTER!");
             base.CompleteActivity();
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void OnDisable()
+    {
+        base.OnDisable();
     }
 }

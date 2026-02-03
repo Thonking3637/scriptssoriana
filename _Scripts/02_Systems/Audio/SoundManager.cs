@@ -1,90 +1,194 @@
 ﻿using UnityEngine;
+using UnityEngine.SceneManagement;
 using System;
 using System.Collections;
 using System.Collections.Generic;
 
-[Serializable]
-public class SoundEntry
-{
-    public string soundName;
-    public AudioClip clip;
-    [Range(0f, 1f)] public float volume = 1f;
-    [Range(0.5f, 2f)] public float pitch = 1f;
-}
-
+/// <summary>
+/// Gestor centralizado de audio para música, SFX e instrucciones.
+/// Persiste entre escenas con DontDestroyOnLoad.
+/// </summary>
 public class SoundManager : MonoBehaviour
 {
-    public static SoundManager Instance;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SINGLETON
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    public static SoundManager Instance { get; private set; }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SERIALIZED FIELDS - Audio Sources
+    // ═══════════════════════════════════════════════════════════════════════════
 
     [Header("Audio Sources")]
-    public AudioSource musicSource;
-    public AudioSource sfxSource;
-    public AudioSource instructionSource;
+    [SerializeField] private AudioSource musicSource;
+    [SerializeField] private AudioSource sfxSource;
+    [SerializeField] private AudioSource instructionSource;
 
-    [Header("Listas de Sonidos")]
-    public List<SoundEntry> soundLibrary = new List<SoundEntry>();
-    public List<AudioClip> successSounds;
+    [Header("Sound Library")]
+    [SerializeField] private List<SoundEntry> soundLibrary = new List<SoundEntry>();
+    [SerializeField] private List<AudioClip> successSounds = new List<AudioClip>();
 
-    private Dictionary<string, SoundEntry> soundDictionary = new Dictionary<string, SoundEntry>();
-    private Coroutine currentInstructionCoroutine;
-    private bool wasMusicPlaying = false;
-    private bool wasSFXPlaying = false;
+    [Header("UI Samples (Preview)")]
+    [SerializeField] private AudioSource uiSampleSource;
+    [SerializeField] private AudioClip sampleMusic;
+    [SerializeField] private AudioClip sampleSFX;
+    [SerializeField] private AudioClip sampleInstruction;
+    [SerializeField] private float sampleMinInterval = 0.15f;
 
-    private float instructionTimePosition = 0f;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CONSTANTS - PlayerPrefs Keys
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    private AudioClip defaultMusicClip;
-    private float defaultMusicVolume = 0.5f;
+    private const string PP_MASTER = "pp_masterVol";
+    private const string PP_MUSIC = "pp_musicVol";
+    private const string PP_SFX = "pp_sfxVol";
+    private const string PP_INSTR = "pp_instrVol";
 
-    private AudioClip previousMusicClip;
-    private float previousMusicVolume;
-    private bool hasStoredPreviousMusic = false;
-
-    public event Action OnInstructionStart;
-    public event Action OnInstructionEnd;
-    private Dictionary<string, AudioSource> activeLoops = new();
-
-    private float savedMusicVolume = -1f;
-
-    // Volúmenes globales
-    const string PP_MASTER = "pp_masterVol";
-    const string PP_MUSIC = "pp_musicVol";
-    const string PP_SFX = "pp_sfxVol";
-    const string PP_INSTR = "pp_instrVol";
-
-    [Range(0f, 1f)] float masterVol = 1f;
-    [Range(0f, 1f)] float musicVol = 0.2f;
-    [Range(0f, 1f)] float sfxVol = 1f;
-    [Range(0f, 1f)] float instrVol = 1f;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ENUMS
+    // ═══════════════════════════════════════════════════════════════════════════
 
     public enum AudioChannel { Master, Music, SFX, Instruction }
 
-    [Header("UI Sample (preview)")]
-    public AudioSource uiSampleSource;
-    public float sampleMinInterval = 0.15f;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // EVENTS
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    private float lastSampleTime = -1f;
-    private Coroutine uiSampleFade;
+    public event Action OnInstructionStart;
+    public event Action OnInstructionEnd;
 
-    private float currentMusicTrim = 1f;
-    private Coroutine musicSmoothCR;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRIVATE STATE - Volume Settings
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private float _masterVol = 1f;
+    private float _musicVol = 0.2f;
+    private float _sfxVol = 1f;
+    private float _instrVol = 1f;
+    private float _currentMusicTrim = 1f;
+    private float _savedMusicVolume = -1f;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRIVATE STATE - Music
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private AudioClip _defaultMusicClip;
+    private float _defaultMusicVolume = 0.5f;
+    private AudioClip _previousMusicClip;
+    private float _previousMusicVolume;
+    private bool _hasStoredPreviousMusic = false;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRIVATE STATE - Instructions
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private Coroutine _currentInstructionCoroutine;
+    private float _instructionTimePosition = 0f;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRIVATE STATE - Pause System
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private bool _isGamePaused = false;
+    private float _pausedInstructionTime = 0f;
+    private float _pausedMusicTime = 0f;
+    private bool _wasInstructionPlaying = false;
+    private bool _wasMusicPlayingOnPause = false;
+    private bool _wasSFXPlayingOnPause = false;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRIVATE STATE - Loops & Coroutines
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private Dictionary<string, SoundEntry> _soundDictionary = new Dictionary<string, SoundEntry>();
+    private Dictionary<string, AudioSource> _activeLoops = new Dictionary<string, AudioSource>();
+    private Coroutine _musicSmoothCR;
+    private Coroutine _uiSampleFade;
+    private float _lastSampleTime = -1f;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PROPERTIES
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    public bool IsGamePaused => _isGamePaused;
+    public bool IsMusicPlaying => musicSource != null && musicSource.isPlaying;
+    public AudioClip CurrentMusicClip => musicSource != null ? musicSource.clip : null;
+    public bool IsInstructionPlaying => instructionSource != null && instructionSource.isPlaying;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LIFECYCLE - Unity Callbacks
+    // ═══════════════════════════════════════════════════════════════════════════
+
     private void Awake()
     {
+        // Singleton con persistencia
         if (Instance == null)
         {
             Instance = this;
-            DontDestroyOnLoad(gameObject); // persiste
-            InitializeSoundLibrary();
-            LoadVolumes();                 // aplica persistencia
-            ApplyVolumes();
+            DontDestroyOnLoad(gameObject);
+            Initialize();
         }
-        else { Destroy(gameObject); return; }
+        else
+        {
+            Destroy(gameObject);
+        }
+    }
 
+    private void OnEnable()
+    {
+        SceneManager.sceneLoaded += OnSceneLoaded;
+        SubscribeToGameManager();
+    }
+
+    private void OnDisable()
+    {
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+        GameManager.OnGamePaused -= HandleGamePaused;
+    }
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        // Re-suscribirse al GameManager cuando cambia la escena
+        SubscribeToGameManager();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // INITIALIZATION
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void Initialize()
+    {
+        InitializeSoundLibrary();
+        LoadVolumes();
+        ApplyVolumes();
+        SetupDefaultMusic();
+        SetupUISampleSource();
+    }
+
+    private void InitializeSoundLibrary()
+    {
+        _soundDictionary.Clear();
+        foreach (var sound in soundLibrary)
+        {
+            if (!string.IsNullOrEmpty(sound.soundName) && !_soundDictionary.ContainsKey(sound.soundName))
+            {
+                _soundDictionary.Add(sound.soundName, sound);
+            }
+        }
+    }
+
+    private void SetupDefaultMusic()
+    {
         if (musicSource != null && musicSource.clip != null)
         {
-            defaultMusicClip = musicSource.clip;
-            defaultMusicVolume = musicSource.volume;
+            _defaultMusicClip = musicSource.clip;
+            _defaultMusicVolume = musicSource.volume;
         }
+    }
 
+    private void SetupUISampleSource()
+    {
         if (uiSampleSource == null)
         {
             var go = new GameObject("UI_SampleSource");
@@ -96,135 +200,259 @@ public class SoundManager : MonoBehaviour
         }
     }
 
-    void LoadVolumes()
+    // ═══════════════════════════════════════════════════════════════════════════
+    // GAME PAUSE SYSTEM (Event-Driven)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private void SubscribeToGameManager()
     {
-        masterVol = PlayerPrefs.GetFloat(PP_MASTER, 1f);
-        musicVol = PlayerPrefs.GetFloat(PP_MUSIC, 0.2f);
-        sfxVol = PlayerPrefs.GetFloat(PP_SFX, 1f);
-        instrVol = PlayerPrefs.GetFloat(PP_INSTR, 1f);
+        // Desuscribirse primero para evitar duplicados
+        GameManager.OnGamePaused -= HandleGamePaused;
+        GameManager.OnGamePaused += HandleGamePaused;
     }
 
-    void SaveVolumes()
+    private void HandleGamePaused(bool paused)
     {
-        PlayerPrefs.SetFloat(PP_MASTER, masterVol);
-        PlayerPrefs.SetFloat(PP_MUSIC, musicVol);
-        PlayerPrefs.SetFloat(PP_SFX, sfxVol);
-        PlayerPrefs.SetFloat(PP_INSTR, instrVol);
-        PlayerPrefs.Save();
+        if (paused)
+            PauseAllAudio();
+        else
+            ResumeAllAudio();
     }
 
-    public float GetMasterVolume() => masterVol;
-    public float GetMusicVolume() => musicVol;
-    public float GetSFXVolume() => sfxVol;
-    public float GetInstrVolume() => instrVol;
+    private void PauseAllAudio()
+    {
+        if (_isGamePaused) return;
+        _isGamePaused = true;
 
-    public void SetMasterVolume(float v, bool playSample = false)
-    {
-        masterVol = Mathf.Clamp01(v);
-        SaveVolumes();
-        ApplyVolumes(smoothMusic: true); 
+        // Pausar instrucciones
+        if (instructionSource != null && instructionSource.isPlaying)
+        {
+            _pausedInstructionTime = instructionSource.time;
+            _wasInstructionPlaying = true;
+            instructionSource.Pause();
+            Debug.Log($"[SoundManager] 🔇 Instrucción pausada en {_pausedInstructionTime:F2}s");
+        }
+        else
+        {
+            _wasInstructionPlaying = false;
+        }
+
+        // Pausar música
+        if (musicSource != null && musicSource.isPlaying)
+        {
+            _pausedMusicTime = musicSource.time;
+            _wasMusicPlayingOnPause = true;
+            musicSource.Pause();
+        }
+        else
+        {
+            _wasMusicPlayingOnPause = false;
+        }
+
+        // Pausar SFX
+        if (sfxSource != null && sfxSource.isPlaying)
+        {
+            _wasSFXPlayingOnPause = true;
+            sfxSource.Pause();
+        }
+        else
+        {
+            _wasSFXPlayingOnPause = false;
+        }
+
+        // Pausar loops activos
+        foreach (var loop in _activeLoops.Values)
+        {
+            if (loop != null && loop.isPlaying)
+                loop.Pause();
+        }
     }
-    public void SetMusicVolume(float v, bool playSample = false)
+
+    private void ResumeAllAudio()
     {
-        musicVol = Mathf.Clamp01(v);
+        if (!_isGamePaused) return;
+        _isGamePaused = false;
+
+        // Reanudar instrucciones
+        if (_wasInstructionPlaying && instructionSource != null)
+        {
+            instructionSource.time = _pausedInstructionTime;
+            instructionSource.UnPause();
+            Debug.Log($"[SoundManager] 🔊 Instrucción reanudada desde {_pausedInstructionTime:F2}s");
+        }
+
+        // Reanudar música
+        if (_wasMusicPlayingOnPause && musicSource != null)
+        {
+            musicSource.time = _pausedMusicTime;
+            musicSource.UnPause();
+        }
+
+        // Reanudar SFX
+        if (_wasSFXPlayingOnPause && sfxSource != null)
+        {
+            sfxSource.UnPause();
+        }
+
+        // Reanudar loops activos
+        foreach (var loop in _activeLoops.Values)
+        {
+            if (loop != null)
+                loop.UnPause();
+        }
+
+        // Reset flags
+        _wasInstructionPlaying = false;
+        _wasMusicPlayingOnPause = false;
+        _wasSFXPlayingOnPause = false;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VOLUME MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #region Volume Getters
+
+    public float GetMasterVolume() => _masterVol;
+    public float GetMusicVolume() => _musicVol;
+    public float GetSFXVolume() => _sfxVol;
+    public float GetInstrVolume() => _instrVol;
+
+    #endregion
+
+    #region Volume Setters
+
+    public void SetMasterVolume(float value, bool playSample = false)
+    {
+        _masterVol = Mathf.Clamp01(value);
         SaveVolumes();
         ApplyVolumes(smoothMusic: true);
     }
-    public void SetSFXVolume(float v, bool playSample = false)
+
+    public void SetMusicVolume(float value, bool playSample = false)
     {
-        sfxVol = Mathf.Clamp01(v); ApplyVolumes(); SaveVolumes();
+        _musicVol = Mathf.Clamp01(value);
+        SaveVolumes();
+        ApplyVolumes(smoothMusic: true);
+    }
+
+    public void SetSFXVolume(float value, bool playSample = false)
+    {
+        _sfxVol = Mathf.Clamp01(value);
+        ApplyVolumes();
+        SaveVolumes();
         if (playSample) PlayPreviewSample(AudioChannel.SFX);
     }
-    public void SetInstrVolume(float v, bool playSample = false)
+
+    public void SetInstrVolume(float value, bool playSample = false)
     {
-        instrVol = Mathf.Clamp01(v); ApplyVolumes(); SaveVolumes();
+        _instrVol = Mathf.Clamp01(value);
+        ApplyVolumes();
+        SaveVolumes();
         if (playSample) PlayPreviewSample(AudioChannel.Instruction);
     }
 
-    // --------------------------
-    // Samples para sliders
-    // --------------------------
-    [Header("Samples de UI")]
-    public AudioClip sampleMusic;
-    public AudioClip sampleSFX;
-    public AudioClip sampleInstruction;
+    #endregion
 
-    void PlayUISampleMusic()
+    #region Volume Persistence
+
+    private void LoadVolumes()
     {
-        if (sampleMusic == null || musicSource == null) return;
-        // reproducir sobre musicSource SIN cambiar loop actual (OneShot no mezcla con musicSource, así que:
-        musicSource.PlayOneShot(sampleMusic, 1f);
-    }
-    void PlayUISampleSFX()
-    {
-        if (sampleSFX == null || sfxSource == null) return;
-        sfxSource.PlayOneShot(sampleSFX, 1f);
-    }
-    void PlayUISampleInstruction()
-    {
-        if (sampleInstruction == null) return;
-        if (instructionSource != null)
-        {
-            instructionSource.Stop();
-            instructionSource.clip = sampleInstruction;
-            instructionSource.time = 0;
-            instructionSource.loop = false;
-            instructionSource.Play();
-        }
-        else
-        {
-            // fallback si aún no creas instructionSource
-            sfxSource?.PlayOneShot(sampleInstruction, 1f);
-        }
+        _masterVol = PlayerPrefs.GetFloat(PP_MASTER, 1f);
+        _musicVol = PlayerPrefs.GetFloat(PP_MUSIC, 0.2f);
+        _sfxVol = PlayerPrefs.GetFloat(PP_SFX, 1f);
+        _instrVol = PlayerPrefs.GetFloat(PP_INSTR, 1f);
     }
 
-    void ApplyVolumes()
+    private void SaveVolumes()
     {
-        float safeMaster = Mathf.Clamp01(masterVol);
-        if (musicSource) musicSource.volume = safeMaster * Mathf.Clamp01(musicVol);
-        if (sfxSource) sfxSource.volume = safeMaster * Mathf.Clamp01(sfxVol);
-        if (instructionSource) instructionSource.volume = safeMaster * Mathf.Clamp01(instrVol);
+        PlayerPrefs.SetFloat(PP_MASTER, _masterVol);
+        PlayerPrefs.SetFloat(PP_MUSIC, _musicVol);
+        PlayerPrefs.SetFloat(PP_SFX, _sfxVol);
+        PlayerPrefs.SetFloat(PP_INSTR, _instrVol);
+        PlayerPrefs.Save();
     }
 
-    private void InitializeSoundLibrary()
+    public void ApplyVolumes(bool smoothMusic = false)
     {
-        soundDictionary.Clear();
-        foreach (var sound in soundLibrary)
+        float master = Mathf.Clamp01(_masterVol);
+
+        // Música
+        if (musicSource != null)
         {
-            if (!soundDictionary.ContainsKey(sound.soundName))
+            float target = Mathf.Clamp01(master * _musicVol * _currentMusicTrim);
+            if (!smoothMusic)
             {
-                soundDictionary.Add(sound.soundName, sound);
+                musicSource.volume = target;
+            }
+            else
+            {
+                if (_musicSmoothCR != null) StopCoroutine(_musicSmoothCR);
+                _musicSmoothCR = StartCoroutine(SmoothVolumeCoroutine(musicSource, target, 0.08f));
             }
         }
+
+        // SFX
+        if (sfxSource != null)
+            sfxSource.volume = Mathf.Clamp01(master * _sfxVol);
+
+        // Instrucciones
+        if (instructionSource != null)
+            instructionSource.volume = Mathf.Clamp01(master * _instrVol);
     }
+
+    #endregion
+
+    #region Temporary Volume Changes
+
+    public void LowerMusicVolume(float newVolume = 0f)
+    {
+        if (musicSource == null) return;
+
+        if (_savedMusicVolume < 0f)
+            _savedMusicVolume = musicSource.volume;
+
+        musicSource.volume = newVolume;
+    }
+
+    public void RestoreMusicVolume()
+    {
+        if (musicSource == null || _savedMusicVolume < 0f) return;
+
+        musicSource.volume = _savedMusicVolume;
+        _savedMusicVolume = -1f;
+    }
+
+    #endregion
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SFX PLAYBACK
+    // ═══════════════════════════════════════════════════════════════════════════
 
     public void PlaySound(string soundName, Action onComplete = null)
     {
-        if (soundDictionary.TryGetValue(soundName, out SoundEntry sound))
+        if (!_soundDictionary.TryGetValue(soundName, out SoundEntry sound))
         {
-            sfxSource.pitch = sound.pitch;
-            sfxSource.PlayOneShot(sound.clip, sound.volume);
+            Debug.LogWarning($"[SoundManager] El sonido '{soundName}' no se encuentra en la librería.");
+            return;
+        }
 
-            if (onComplete != null)
-            {
-                StartCoroutine(ExecuteAfterSound(sound.clip.length, onComplete));
-            }
-        }
-        else
-        {
-            Debug.LogWarning($"El sonido '{soundName}' no se encuentra en la lista.");
-        }
+        sfxSource.pitch = sound.pitch;
+        sfxSource.PlayOneShot(sound.clip, sound.volume);
+
+        if (onComplete != null)
+            StartCoroutine(ExecuteAfterDelayCoroutine(sound.clip.length, onComplete));
     }
 
     public void PlaySound(AudioClip clip, float volume = 1f)
     {
         if (clip == null)
         {
-            Debug.LogWarning("AudioClip nulo en PlaySound(AudioClip)");
+            Debug.LogWarning("[SoundManager] AudioClip nulo en PlaySound");
             return;
         }
 
-        sfxSource.pitch = UnityEngine.Random.Range(1f, 1.05f); // opcional
+        sfxSource.pitch = UnityEngine.Random.Range(1f, 1.05f);
         sfxSource.PlayOneShot(clip, volume);
     }
 
@@ -232,85 +460,20 @@ public class SoundManager : MonoBehaviour
     {
         if (clip == null)
         {
-            Debug.LogWarning("AudioClip nulo en PlaySound con callback");
+            Debug.LogWarning("[SoundManager] AudioClip nulo en PlaySound con callback");
             return;
         }
 
         sfxSource.PlayOneShot(clip);
 
         if (onComplete != null)
-            StartCoroutine(ExecuteAfterSound(clip.length, onComplete));
-    }
-
-    private IEnumerator ExecuteAfterSound(float duration, Action onComplete)
-    {
-        yield return new WaitForSeconds(duration);
-        onComplete?.Invoke();
+            StartCoroutine(ExecuteAfterDelayCoroutine(clip.length, onComplete));
     }
 
     public void PlaySFX(AudioClip clip, float volume = 1f)
     {
-        sfxSource.PlayOneShot(clip, volume);
-    }
-
-    public void PlayInstructionSound(AudioClip clip, Action onComplete = null)
-    {
-        if (clip == null || instructionSource == null)
-        {
-            base_PlayInstructionWithSFX(clip, onComplete);
-            return;
-        }
-
-        if (currentInstructionCoroutine != null) StopCoroutine(currentInstructionCoroutine);
-        instructionTimePosition = 0f;
-        currentInstructionCoroutine = StartCoroutine(PlayInstructionCoroutine_NEW(clip, onComplete));
-        OnInstructionStart?.Invoke();
-    }
-
-    private IEnumerator PlayInstructionCoroutine_NEW(AudioClip clip, Action onComplete)
-    {
-        instructionSource.clip = clip;
-        instructionSource.time = instructionTimePosition;
-        instructionSource.Play();
-        while (instructionSource.isPlaying) yield return null;
-        instructionTimePosition = 0f;
-        OnInstructionEnd?.Invoke();
-        onComplete?.Invoke();
-    }
-
-    void base_PlayInstructionWithSFX(AudioClip clip, Action onComplete)
-    {
-        if (currentInstructionCoroutine != null) StopCoroutine(currentInstructionCoroutine);
-        instructionTimePosition = 0f;
-        currentInstructionCoroutine = StartCoroutine(PlayInstructionCoroutine(clip, onComplete));
-        OnInstructionStart?.Invoke();
-    }
-
-    public void StopInstructionSound()
-    {
-        if (instructionSource != null && instructionSource.isPlaying) instructionSource.Stop();
-        if (sfxSource != null && sfxSource.isPlaying) sfxSource.Stop();
-        if (currentInstructionCoroutine != null)
-        {
-            StopCoroutine(currentInstructionCoroutine);
-            currentInstructionCoroutine = null;
-        }
-    }
-
-    private IEnumerator PlayInstructionCoroutine(AudioClip clip, Action onComplete)
-    {
-        sfxSource.clip = clip;
-        sfxSource.time = instructionTimePosition;
-        sfxSource.Play();
-
-        while (sfxSource.isPlaying)
-        {
-            yield return null;
-        }
-
-        instructionTimePosition = 0f;
-        OnInstructionEnd?.Invoke();
-        onComplete?.Invoke();
+        if (clip != null)
+            sfxSource.PlayOneShot(clip, volume);
     }
 
     public void PlaySuccessSound(AudioClip specificClip = null)
@@ -321,107 +484,142 @@ public class SoundManager : MonoBehaviour
         }
         else if (successSounds.Count > 0)
         {
-            AudioClip randomSuccessClip = successSounds[UnityEngine.Random.Range(0, successSounds.Count)];
-            sfxSource.PlayOneShot(randomSuccessClip);
+            AudioClip randomClip = successSounds[UnityEngine.Random.Range(0, successSounds.Count)];
+            sfxSource.PlayOneShot(randomClip);
         }
         else
         {
-            Debug.LogWarning("No hay sonidos de éxito asignados en la lista.");
+            Debug.LogWarning("[SoundManager] No hay sonidos de éxito asignados.");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // INSTRUCTION AUDIO
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    public void PlayInstructionSound(AudioClip clip, Action onComplete = null)
+    {
+        if (clip == null) return;
+
+        // Usar instructionSource si está disponible, sino fallback a sfxSource
+        if (instructionSource == null)
+        {
+            PlayInstructionWithSFXFallback(clip, onComplete);
+            return;
+        }
+
+        if (_currentInstructionCoroutine != null)
+            StopCoroutine(_currentInstructionCoroutine);
+
+        _instructionTimePosition = 0f;
+        _currentInstructionCoroutine = StartCoroutine(PlayInstructionCoroutine(clip, onComplete));
+        OnInstructionStart?.Invoke();
+    }
+
+    public void StopInstructionSound()
+    {
+        if (instructionSource != null && instructionSource.isPlaying)
+            instructionSource.Stop();
+
+        if (sfxSource != null && sfxSource.isPlaying)
+            sfxSource.Stop();
+
+        if (_currentInstructionCoroutine != null)
+        {
+            StopCoroutine(_currentInstructionCoroutine);
+            _currentInstructionCoroutine = null;
         }
     }
 
     public void PauseInstructions()
     {
-        if (sfxSource.isPlaying)
+        if (instructionSource != null && instructionSource.isPlaying)
         {
-            instructionTimePosition = sfxSource.time; 
+            _pausedInstructionTime = instructionSource.time;
+            instructionSource.Pause();
+        }
+        else if (sfxSource != null && sfxSource.isPlaying)
+        {
+            _instructionTimePosition = sfxSource.time;
             sfxSource.Pause();
         }
     }
 
     public void ResumeInstructions()
     {
-        if (instructionTimePosition > 0f)
+        if (instructionSource != null && _pausedInstructionTime > 0f)
         {
-            sfxSource.time = instructionTimePosition;
+            instructionSource.time = _pausedInstructionTime;
+            instructionSource.UnPause();
+            _pausedInstructionTime = 0f;
+        }
+        else if (_instructionTimePosition > 0f && sfxSource != null)
+        {
+            sfxSource.time = _instructionTimePosition;
             sfxSource.Play();
         }
     }
 
-    /// Pausa la música y el sonido cuando el juego está pausado.
-    public void PauseAudio()
+    private IEnumerator PlayInstructionCoroutine(AudioClip clip, Action onComplete)
     {
-        if (musicSource.isPlaying)
-        {
-            wasMusicPlaying = true;
-            musicSource.Pause();
-        }
-        else
-        {
-            wasMusicPlaying = false;
-        }
+        instructionSource.clip = clip;
+        instructionSource.time = _instructionTimePosition;
+        instructionSource.Play();
 
-        if (sfxSource.isPlaying)
-        {
-            wasSFXPlaying = true;
-            sfxSource.Pause();
-        }
-        else
-        {
-            wasSFXPlaying = false;
-        }
+        while (instructionSource.isPlaying)
+            yield return null;
+
+        _instructionTimePosition = 0f;
+        _currentInstructionCoroutine = null;
+        OnInstructionEnd?.Invoke();
+        onComplete?.Invoke();
     }
 
-    /// Reanuda la música y el sonido desde donde se quedaron.
-    public void ResumeAudio()
+    private void PlayInstructionWithSFXFallback(AudioClip clip, Action onComplete)
     {
-        if (wasMusicPlaying)
-        {
-            musicSource.UnPause();
-        }
+        if (_currentInstructionCoroutine != null)
+            StopCoroutine(_currentInstructionCoroutine);
 
-        if (wasSFXPlaying)
-        {
-            sfxSource.UnPause();
-        }
+        _instructionTimePosition = 0f;
+        _currentInstructionCoroutine = StartCoroutine(PlayInstructionWithSFXCoroutine(clip, onComplete));
+        OnInstructionStart?.Invoke();
     }
 
-    // Nueva función para restaurar la música anterior
-    public void RestorePreviousMusic(bool fallbackToDefault = true)
+    private IEnumerator PlayInstructionWithSFXCoroutine(AudioClip clip, Action onComplete)
     {
-        if (hasStoredPreviousMusic && previousMusicClip != null)
-        {
-            PlayMusic(previousMusicClip, previousMusicVolume);
-            previousMusicClip = null;
-            hasStoredPreviousMusic = false;
-            return;
-        }
+        sfxSource.clip = clip;
+        sfxSource.time = _instructionTimePosition;
+        sfxSource.Play();
 
-        if (fallbackToDefault && defaultMusicClip != null)
-            PlayMusic(defaultMusicClip, defaultMusicVolume);
-        else
-            StopMusic();
+        while (sfxSource.isPlaying)
+            yield return null;
+
+        _instructionTimePosition = 0f;
+        _currentInstructionCoroutine = null;
+        OnInstructionEnd?.Invoke();
+        onComplete?.Invoke();
     }
 
-    public void PlayMusic(AudioClip clip, float vol = 1f, bool loop = true)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MUSIC PLAYBACK
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    public void PlayMusic(AudioClip clip, float volume = 1f, bool loop = true)
     {
         if (musicSource == null || clip == null) return;
 
-        currentMusicTrim = Mathf.Clamp01(vol);
+        _currentMusicTrim = Mathf.Clamp01(volume);
         musicSource.Stop();
         musicSource.loop = loop;
         musicSource.clip = clip;
-        musicSource.volume = Mathf.Clamp01(GetMasterVolume() * GetMusicVolume() * currentMusicTrim);
+        musicSource.volume = Mathf.Clamp01(_masterVol * _musicVol * _currentMusicTrim);
         musicSource.Play();
     }
 
-    public void PlayMusic(AudioClip clip, bool loop = true)
+    public void PlayMusic(AudioClip clip, bool loop)
     {
         PlayMusic(clip, 1f, loop);
     }
-
-    public AudioClip CurrentMusicClip() => musicSource ? musicSource.clip : null;
-    public bool IsMusicPlaying() => musicSource && musicSource.isPlaying;
 
     public void StopMusic()
     {
@@ -432,22 +630,142 @@ public class SoundManager : MonoBehaviour
 
     public void SetDefaultMusic(AudioClip clip, float volume = 1f)
     {
-        defaultMusicClip = clip;
-        defaultMusicVolume = volume;
+        _defaultMusicClip = clip;
+        _defaultMusicVolume = volume;
     }
-    public bool IsInstructionPlaying()
+
+    public void SetActivityMusic(AudioClip newMusic, float volume = 0.2f, bool restartIfSame = false)
     {
-        return sfxSource.isPlaying && currentInstructionCoroutine != null;
+        if (musicSource == null || newMusic == null) return;
+
+        bool isSameClip = (musicSource.clip == newMusic);
+
+        // Guardar música anterior si es diferente
+        if (!_hasStoredPreviousMusic && musicSource.clip != null && !isSameClip)
+        {
+            _previousMusicClip = musicSource.clip;
+            _previousMusicVolume = _currentMusicTrim;
+            _hasStoredPreviousMusic = true;
+        }
+
+        _currentMusicTrim = Mathf.Clamp01(volume);
+
+        // Si es la misma y no queremos reiniciar, solo ajustar volumen
+        if (isSameClip && !restartIfSame)
+        {
+            ApplyVolumes(smoothMusic: true);
+            return;
+        }
+
+        PlayMusic(newMusic, _currentMusicTrim, loop: true);
     }
+
+    public void SetSceneBaseMusic(AudioClip clip, float volumeTrim = 1f, bool force = true)
+    {
+        if (clip == null || musicSource == null) return;
+
+        _hasStoredPreviousMusic = false;
+        _previousMusicClip = null;
+
+        _defaultMusicClip = clip;
+        _defaultMusicVolume = Mathf.Clamp01(volumeTrim);
+
+        if (force || CurrentMusicClip != clip)
+            PlayMusic(clip, _defaultMusicVolume, loop: true);
+        else
+            ApplyVolumes(smoothMusic: false);
+    }
+
+    public void RestorePreviousMusic(bool fallbackToDefault = true)
+    {
+        if (_hasStoredPreviousMusic && _previousMusicClip != null)
+        {
+            PlayMusic(_previousMusicClip, _previousMusicVolume);
+            _previousMusicClip = null;
+            _hasStoredPreviousMusic = false;
+            return;
+        }
+
+        if (fallbackToDefault && _defaultMusicClip != null)
+            PlayMusic(_defaultMusicClip, _defaultMusicVolume);
+        else
+            StopMusic();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MUSIC CROSSFADE
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    public void CrossfadeMusic(AudioClip newClip, float fadeOut = 0.5f, float fadeIn = 0.6f,
+                               float volumeTrim = 0.3f, bool loop = true, bool restartIfSame = false)
+    {
+        if (musicSource == null || newClip == null) return;
+
+        // Si es la misma y no queremos reiniciar, solo ajustar volumen
+        if (musicSource.clip == newClip && !restartIfSame)
+        {
+            _currentMusicTrim = Mathf.Clamp01(volumeTrim);
+            ApplyVolumes(smoothMusic: true);
+            return;
+        }
+
+        // Guardar música anterior
+        if (!_hasStoredPreviousMusic && musicSource.clip != null && musicSource.clip != newClip)
+        {
+            _previousMusicClip = musicSource.clip;
+            _previousMusicVolume = _currentMusicTrim;
+            _hasStoredPreviousMusic = true;
+        }
+
+        StartCoroutine(CrossfadeMusicCoroutine(newClip, fadeOut, fadeIn, Mathf.Clamp01(volumeTrim), loop));
+    }
+
+    public void CrossfadeToPrevious(float fadeOut = 0.4f, float fadeIn = 0.6f)
+    {
+        if (!_hasStoredPreviousMusic || _previousMusicClip == null)
+        {
+            RestorePreviousMusic(fallbackToDefault: true);
+            return;
+        }
+        CrossfadeMusic(_previousMusicClip, fadeOut, fadeIn, _previousMusicVolume, loop: true, restartIfSame: false);
+    }
+
+    private IEnumerator CrossfadeMusicCoroutine(AudioClip newClip, float fadeOut, float fadeIn, float volumeTrim, bool loop)
+    {
+        // 1) Fade out
+        if (_musicSmoothCR != null) StopCoroutine(_musicSmoothCR);
+        _musicSmoothCR = StartCoroutine(SmoothVolumeCoroutine(musicSource, 0f, Mathf.Max(0.01f, fadeOut)));
+        yield return _musicSmoothCR;
+
+        // 2) Cambiar clip
+        musicSource.Stop();
+        musicSource.clip = newClip;
+        musicSource.loop = loop;
+
+        _currentMusicTrim = volumeTrim;
+        ApplyVolumes(smoothMusic: false);
+        float targetVolume = musicSource.volume;
+
+        musicSource.volume = 0f;
+        musicSource.Play();
+
+        // 3) Fade in
+        _musicSmoothCR = StartCoroutine(SmoothVolumeCoroutine(musicSource, targetVolume, Mathf.Max(0.01f, fadeIn)));
+        yield return _musicSmoothCR;
+        _musicSmoothCR = null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LOOP SOUNDS
+    // ═══════════════════════════════════════════════════════════════════════════
 
     public void PlayLoop(string soundName, float volumeOverride = 1f)
     {
-        // Si ya está sonando, lo detenemos primero
         StopLoop(soundName);
 
-        if (!soundDictionary.TryGetValue(soundName, out SoundEntry sound))
+        if (!_soundDictionary.TryGetValue(soundName, out SoundEntry sound))
         {
-            Debug.LogWarning($"❌ El sonido '{soundName}' no se encuentra en la soundLibrary.");
+            Debug.LogWarning($"[SoundManager] El sonido '{soundName}' no se encuentra en la librería.");
             return;
         }
 
@@ -459,58 +777,57 @@ public class SoundManager : MonoBehaviour
         loopSource.loop = true;
         loopSource.Play();
 
-        activeLoops[soundName] = loopSource;
+        _activeLoops[soundName] = loopSource;
     }
 
     public void StopLoop(string soundName)
     {
-        if (activeLoops.TryGetValue(soundName, out AudioSource source))
+        if (_activeLoops.TryGetValue(soundName, out AudioSource source))
         {
             if (source != null)
                 Destroy(source.gameObject);
 
-            activeLoops.Remove(soundName);
+            _activeLoops.Remove(soundName);
         }
     }
 
-    public void LowerMusicVolume(float newVolume = 0f)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // UI PREVIEW SAMPLES
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    public void PlayPreviewSample(AudioChannel channel)
     {
-        if (musicSource == null) return;
-
-        if (savedMusicVolume < 0f) // guardar solo una vez
-            savedMusicVolume = musicSource.volume;
-
-        musicSource.volume = newVolume;
-    }
-
-    public void RestoreMusicVolume()
-    {
-        if (musicSource == null || savedMusicVolume < 0f) return;
-
-        musicSource.volume = savedMusicVolume;
-        savedMusicVolume = -1f;
-    }
-
-    // PARA LLAMAR DESDE LOS SETTERS O EL SLIDER
-    public void PlayPreviewSample(AudioChannel ch)
-    {
-        if (Time.unscaledTime - lastSampleTime < sampleMinInterval) return; // anti-doble tap
-        lastSampleTime = Time.unscaledTime;
+        if (Time.unscaledTime - _lastSampleTime < sampleMinInterval) return;
+        _lastSampleTime = Time.unscaledTime;
 
         AudioClip clip = null;
-        float chVol = 1f;
-        switch (ch)
+        float channelVol = 1f;
+
+        switch (channel)
         {
-            case AudioChannel.Music: clip = sampleMusic; chVol = GetMusicVolume(); break;
-            case AudioChannel.SFX: clip = sampleSFX; chVol = GetSFXVolume(); break;
-            case AudioChannel.Instruction: clip = sampleInstruction; chVol = GetInstrVolume(); break;
-            default: clip = sampleSFX; chVol = GetMasterVolume(); break;
+            case AudioChannel.Music:
+                clip = sampleMusic;
+                channelVol = _musicVol;
+                break;
+            case AudioChannel.SFX:
+                clip = sampleSFX;
+                channelVol = _sfxVol;
+                break;
+            case AudioChannel.Instruction:
+                clip = sampleInstruction;
+                channelVol = _instrVol;
+                break;
+            default:
+                clip = sampleSFX;
+                channelVol = _masterVol;
+                break;
         }
+
         if (clip == null || uiSampleSource == null) return;
 
-        StopPreviewSamples(); // corta cualquier sample previo
+        StopPreviewSamples();
 
-        uiSampleSource.volume = Mathf.Clamp01(GetMasterVolume() * chVol);
+        uiSampleSource.volume = Mathf.Clamp01(_masterVol * channelVol);
         uiSampleSource.clip = clip;
         uiSampleSource.time = 0f;
         uiSampleSource.loop = false;
@@ -520,157 +837,74 @@ public class SoundManager : MonoBehaviour
     public void StopPreviewSamples(bool hardStop = true)
     {
         if (uiSampleSource == null) return;
-        if (uiSampleFade != null) { StopCoroutine(uiSampleFade); uiSampleFade = null; }
-        if (hardStop) uiSampleSource.Stop();
-        else uiSampleFade = StartCoroutine(FadeOutAndStop(uiSampleSource, 0.05f));
-    }
 
-    IEnumerator FadeOutAndStop(AudioSource src, float t)
-    {
-        if (!src.isPlaying) yield break;
-        float start = src.volume, e = 0f;
-        while (e < t) { e += Time.unscaledDeltaTime; src.volume = Mathf.Lerp(start, 0f, e / t); yield return null; }
-        src.Stop(); src.volume = start;
-    }
-
-
-    public void ApplyVolumes(bool smoothMusic = false)
-    {
-        float master = Mathf.Clamp01(GetMasterVolume());
-
-        if (musicSource)
+        if (_uiSampleFade != null)
         {
-            float target = Mathf.Clamp01(master * GetMusicVolume() * currentMusicTrim);
-            if (!smoothMusic) musicSource.volume = target;
-            else
-            {
-                if (musicSmoothCR != null) StopCoroutine(musicSmoothCR);
-                musicSmoothCR = StartCoroutine(SmoothVolume(musicSource, target, 0.08f));
-            }
-        }
-        if (sfxSource) sfxSource.volume = Mathf.Clamp01(master * GetSFXVolume());
-        if (instructionSource) instructionSource.volume = Mathf.Clamp01(master * GetInstrVolume());
-    }
-
-    public void SetActivityMusic(AudioClip newMusic, float volume = 0.2f, bool restartIfSame = false)
-    {
-        if (musicSource == null || newMusic == null) return;
-
-        bool same = (musicSource.clip == newMusic);
-
-        // Guarda "previous" solo una vez y solo si cambias a otra pista
-        if (!hasStoredPreviousMusic && musicSource.clip != null && !same)
-        {
-            previousMusicClip = musicSource.clip;
-            previousMusicVolume = currentMusicTrim; // o musicSource.volume si prefieres absoluto
-            hasStoredPreviousMusic = true;
+            StopCoroutine(_uiSampleFade);
+            _uiSampleFade = null;
         }
 
-        // Trim relativo para esta pista
-        currentMusicTrim = Mathf.Clamp01(volume);
-
-        // 🔸 Si es la MISMA pista y NO quieres reiniciar, solo ajusta volumen suavemente
-        if (same && !restartIfSame)
-        {
-            ApplyVolumes(smoothMusic: true);
-            return;
-        }
-
-        // 🔸 Si es distinta (o pediste reinicio), sí cambia el clip
-        PlayMusic(newMusic, currentMusicTrim, loop: true);
-    }
-
-    [Obsolete("Usa SetActivityMusic(clip, volume, restartIfSame) si necesitas controlar el reinicio.")]
-    public void SetActivityMusic(AudioClip newMusic)
-    => SetActivityMusic(newMusic, 0.2f, false);
-
-    [Obsolete("Usa SetActivityMusic(clip, volume, restartIfSame) si necesitas controlar el reinicio.")]
-    public void SetActivityMusic(AudioClip newMusic, float volume)
-        => SetActivityMusic(newMusic, volume, false);
-
-    IEnumerator SmoothVolume(AudioSource src, float target, float dur)
-    {
-        float start = src.volume, t = 0f;
-        while (t < dur) { t += Time.unscaledDeltaTime; src.volume = Mathf.Lerp(start, target, t / dur); yield return null; }
-        src.volume = target; musicSmoothCR = null;
-    }
-
-    public void SetSceneBaseMusic(AudioClip clip, float volTrim = 1f, bool force = true)
-    {
-        if (clip == null || musicSource == null) return;
-
-        hasStoredPreviousMusic = false;
-        previousMusicClip = null;
-
-        // Actualiza tu "default" (útil para RestorePreviousMusic sin fallback extraño)
-        defaultMusicClip = clip;
-        defaultMusicVolume = Mathf.Clamp01(volTrim);
-
-        // Reproduce o reaplica volúmenes
-        if (force || CurrentMusicClip() != clip)
-            PlayMusic(clip, defaultMusicVolume, loop: true);
+        if (hardStop)
+            uiSampleSource.Stop();
         else
-            ApplyVolumes(smoothMusic: false); // recalcula Master*Music*trim
+            _uiSampleFade = StartCoroutine(FadeOutAndStopCoroutine(uiSampleSource, 0.05f));
     }
 
-    // Crossfade de música usando el MISMO musicSource (fade out → swap clip → fade in).
-    public void CrossfadeMusic(AudioClip newClip, float fadeOut = 0.5f, float fadeIn = 0.6f, float volumeTrim = 0.3f, bool loop = true, bool restartIfSame = false)
-    {
-        if (musicSource == null || newClip == null) return;
 
-        // Si es la misma pista y no quieres reiniciar, solo ajusta volumen suavemente.
-        if (musicSource.clip == newClip && !restartIfSame)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // UTILITY COROUTINES
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private IEnumerator ExecuteAfterDelayCoroutine(float delay, Action callback)
+    {
+        yield return new WaitForSeconds(delay);
+        callback?.Invoke();
+    }
+
+    private IEnumerator SmoothVolumeCoroutine(AudioSource source, float targetVolume, float duration)
+    {
+        float startVolume = source.volume;
+        float elapsed = 0f;
+
+        while (elapsed < duration)
         {
-            currentMusicTrim = Mathf.Clamp01(volumeTrim);
-            ApplyVolumes(smoothMusic: true); // respeta Master * Music * Trim y el slider del menú
-            return;
+            elapsed += Time.unscaledDeltaTime;
+            source.volume = Mathf.Lerp(startVolume, targetVolume, elapsed / duration);
+            yield return null;
         }
 
-        // Guarda "previous" si estamos cambiando de pista
-        if (!hasStoredPreviousMusic && musicSource.clip != null && musicSource.clip != newClip)
+        source.volume = targetVolume;
+        _musicSmoothCR = null;
+    }
+
+    private IEnumerator FadeOutAndStopCoroutine(AudioSource source, float duration)
+    {
+        if (!source.isPlaying) yield break;
+
+        float startVolume = source.volume;
+        float elapsed = 0f;
+
+        while (elapsed < duration)
         {
-            previousMusicClip = musicSource.clip;
-            previousMusicVolume = currentMusicTrim;
-            hasStoredPreviousMusic = true;
+            elapsed += Time.unscaledDeltaTime;
+            source.volume = Mathf.Lerp(startVolume, 0f, elapsed / duration);
+            yield return null;
         }
 
-        StartCoroutine(CrossfadeMusicCR(newClip, fadeOut, fadeIn, Mathf.Clamp01(volumeTrim), loop));
+        source.Stop();
+        source.volume = startVolume;
     }
+}
 
-    private IEnumerator CrossfadeMusicCR(AudioClip newClip, float fadeOut, float fadeIn, float volumeTrim, bool loop)
-    {
-        // 1) Fade out de la música actual (respetando Master/Music del slider)
-        if (musicSmoothCR != null) StopCoroutine(musicSmoothCR);
-        float targetOut = 0f;
-        musicSmoothCR = StartCoroutine(SmoothVolume(musicSource, targetOut, Mathf.Max(0.01f, fadeOut)));
-        yield return musicSmoothCR; // espera a que termine
+// ═══════════════════════════════════════════════════════════════════════════════
+// SOUND ENTRY (Data Class)
+// ═══════════════════════════════════════════════════════════════════════════════
 
-        // 2) Swap de clip (con volumen 0), mantener integración con sliders
-        musicSource.Stop();
-        musicSource.clip = newClip;
-        musicSource.loop = loop;
-
-        currentMusicTrim = volumeTrim; // trim relativo de la pista nueva
-        ApplyVolumes(smoothMusic: false); // calcula Master*Music*Trim → pone volumen "target"
-        float targetIn = musicSource.volume; // este es el volumen correcto según el menú
-
-        musicSource.volume = 0f; // arrancar desde 0 para el fade-in
-        musicSource.Play();
-
-        // 3) Fade in hasta el volumen objetivo calculado
-        musicSmoothCR = StartCoroutine(SmoothVolume(musicSource, targetIn, Mathf.Max(0.01f, fadeIn)));
-        yield return musicSmoothCR;
-        musicSmoothCR = null;
-    }
-
-    // Atajo: crossfade a la música previa (si fue almacenada por SetActivityMusic/CrossfadeMusic)
-    public void CrossfadeToPrevious(float fadeOut = 0.4f, float fadeIn = 0.6f)
-    {
-        if (!hasStoredPreviousMusic || previousMusicClip == null)
-        {
-            RestorePreviousMusic(fallbackToDefault: true); // usa el flujo existente si no hay previa
-            return;
-        }
-        CrossfadeMusic(previousMusicClip, fadeOut, fadeIn, previousMusicVolume, loop: true, restartIfSame: false);
-    }
+[Serializable]
+public class SoundEntry
+{
+    public string soundName;
+    public AudioClip clip;
+    [Range(0f, 1f)] public float volume = 1f;
+    [Range(0.5f, 2f)] public float pitch = 1f;
 }

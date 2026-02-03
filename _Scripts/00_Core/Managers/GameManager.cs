@@ -7,6 +7,17 @@ using UnityEngine.UI;
 
 public class GameManager : MonoBehaviour
 {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // EVENTO GLOBAL DE PAUSA
+    // Cualquier sistema puede suscribirse para reaccionar a la pausa
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Evento que se dispara cuando el juego se pausa o reanuda.
+    /// true = pausado, false = reanudado
+    /// </summary>
+    public static event Action<bool> OnGamePaused;
+
     [Header("UI Elements")]
     public GameObject pausePanel;
     public CanvasGroup fadePanel;
@@ -15,9 +26,6 @@ public class GameManager : MonoBehaviour
     [Header("Botón de Pausa")]
     public GameObject pauseButton;
     public GameObject resumeButton;
-    public Image pauseButtonImage;
-    public Sprite normalPauseSprite;
-    public Sprite disabledPauseSprite;
 
     [Header("Gestor de Introducción")]
     public IntroManager introManager;
@@ -50,6 +58,10 @@ public class GameManager : MonoBehaviour
     private SmoothCameraController cameraController;
 
     public static event Action<string> OnSceneProgressChanged;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LIFECYCLE
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private void Awake()
     {
@@ -95,13 +107,6 @@ public class GameManager : MonoBehaviour
                 introManager.fadeCanvas = fadePanel;
             }
 
-            if (SoundManager.Instance != null)
-            {
-                SoundManager.Instance.OnInstructionStart += DisablePauseButton;
-                SoundManager.Instance.OnInstructionEnd += EnablePauseButton;
-            }
-            DisablePauseButton();
-
             introManager.ShowIntro(introMessage, StartNextActivity);
             return;
         }
@@ -112,45 +117,66 @@ public class GameManager : MonoBehaviour
             fadePanel.DOFade(0, fadeDuration).SetUpdate(true);
         }
 
-        if (SoundManager.Instance != null)
-        {
-            SoundManager.Instance.OnInstructionStart += DisablePauseButton;
-            SoundManager.Instance.OnInstructionEnd += EnablePauseButton;
-        }
-        DisablePauseButton();
-
         StartNextActivity();
     }
 
-    private void DisablePauseButton()
-    {
-        if (pauseButtonImage != null)
-        {
-            pauseButtonImage.sprite = disabledPauseSprite;
-            pauseButtonImage.color = new Color(1, 1, 1, 0.5f);
-        }
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SISTEMA DE PAUSA (Event-Driven)
+    // ═══════════════════════════════════════════════════════════════════════════
+  
 
-        if (pauseButton != null)
-        {
-            var btn = pauseButton.GetComponent<Button>();
-            if (btn != null) btn.interactable = false;
-        }
+    /// <summary>
+    /// Establece el estado de pausa directamente.
+    /// </summary>
+    public void SetPaused(bool paused)
+    {
+        if (isPaused == paused) return;
+
+        isPaused = paused;
+
+        // 1. Time scale
+        Time.timeScale = isPaused ? 0f : 1f;
+
+        // 2. UI de pausa
+        UpdatePauseUI();
+
+        // 3. Notificar a TODOS los sistemas suscritos
+        OnGamePaused?.Invoke(isPaused);
+
+        Debug.Log($"[GameManager] Juego {(isPaused ? "PAUSADO" : "REANUDADO")}");
     }
 
-    private void EnablePauseButton()
+    /// <summary>
+    /// Reanuda el juego (llamado desde botón Resume).
+    /// </summary>
+    public void ResumeGame()
     {
-        if (pauseButtonImage != null)
-        {
-            pauseButtonImage.sprite = normalPauseSprite;
-            pauseButtonImage.color = new Color(1, 1, 1, 1f);
-        }
+        SetPaused(false);
+    }
+
+    /// <summary>
+    /// Actualiza la UI de pausa.
+    /// </summary>
+    private void UpdatePauseUI()
+    {
+        if (pausePanel != null)
+            pausePanel.SetActive(isPaused);
 
         if (pauseButton != null)
-        {
-            var btn = pauseButton.GetComponent<Button>();
-            if (btn != null) btn.interactable = true;
-        }
+            pauseButton.SetActive(!isPaused);
+
+        if (resumeButton != null)
+            resumeButton.SetActive(isPaused);
     }
+
+    /// <summary>
+    /// Propiedad para verificar si el juego está pausado.
+    /// </summary>
+    public bool IsPaused => isPaused;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ACTIVIDADES
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private void InitializeActivities()
     {
@@ -187,7 +213,6 @@ public class GameManager : MonoBehaviour
 
         currentActivity = activities[currentActivityIndex];
 
-        // ✅ FIX: Verificar que currentActivity no sea null
         if (currentActivity == null)
         {
             Debug.LogError($"[GameManager] La actividad en el índice {currentActivityIndex} es NULL.");
@@ -241,10 +266,8 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    // ✅ FIX PRINCIPAL: Verificación de null en HandleActivityComplete
     private void HandleActivityComplete()
     {
-        // ✅ FIX: Verificar que currentActivity no sea null antes de usarlo
         if (currentActivity != null)
         {
             currentActivity.OnActivityComplete -= HandleActivityComplete;
@@ -292,6 +315,10 @@ public class GameManager : MonoBehaviour
         StartNextActivity();
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NAVEGACIÓN
+    // ═══════════════════════════════════════════════════════════════════════════
+
     public void ReturnToMenu()
     {
         // Limpiar el ActivityLauncher si existe
@@ -300,7 +327,6 @@ public class GameManager : MonoBehaviour
             Destroy(ActivityLauncher.Instance.gameObject);
         }
 
-        // ✅ FIX: Verificar fadePanel antes de usar
         if (fadePanel != null)
         {
             fadePanel.DOFade(1, fadeDuration).OnComplete(() =>
@@ -313,39 +339,90 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            // Fallback si no hay fadePanel
             Time.timeScale = 1;
             DOTween.KillAll();
             Destroy(gameObject);
             LoadingScreen.LoadScene("Menu");
         }
     }
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MENU PAUSE
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    public void TogglePause()
+    {
+        SetPaused(!isPaused);
+    }
 
     public void ReturnToMenuImmediate()
     {
-        // 1. Detener sonidos/tweens primero
-        DOTween.KillAll();
         Time.timeScale = 1;
 
-        // 2. Limpiar el ActivityLauncher si existe
         if (ActivityLauncher.Instance != null)
         {
             Destroy(ActivityLauncher.Instance.gameObject);
         }
 
-        // 3. Cargar el menú con fade out
         if (fadePanel != null)
         {
+            fadePanel.DOKill();
             fadePanel.DOFade(1, fadeDuration).OnComplete(() =>
             {
+                DOTween.KillAll();
                 Destroy(gameObject);
                 LoadingScreen.LoadScene("Menu");
             });
         }
         else
         {
+            DOTween.KillAll();
             Destroy(gameObject);
             LoadingScreen.LoadScene("Menu");
+        }
+    }
+
+    public void RestartCurrentActivity()
+    {
+        SetPaused(false);
+
+        // 1. Detener TODO el audio inmediatamente
+        if (SoundManager.Instance != null)
+        {
+            SoundManager.Instance.StopInstructionSound();
+            // Opcional: también bajar música
+            SoundManager.Instance.LowerMusicVolume(0f);
+        }
+
+        // 2. Configurar ActivityLauncher
+        if (ActivityLauncher.Instance != null)
+        {
+            ActivityLauncher.Instance.activityIndexToStart = currentActivityIndex;
+        }
+        else
+        {
+            var launcher = new GameObject("ActivityLauncher").AddComponent<ActivityLauncher>();
+            launcher.activityIndexToStart = currentActivityIndex;
+            DontDestroyOnLoad(launcher.gameObject);
+        }
+
+        // 3. Fade out y recargar
+        string currentScene = SceneManager.GetActiveScene().name;
+
+        if (fadePanel != null)
+        {
+            fadePanel.DOKill();
+            fadePanel.DOFade(1, fadeDuration).OnComplete(() =>
+            {
+                DOTween.KillAll();
+                Destroy(gameObject);
+                LoadingScreen.LoadScene(currentScene);
+            });
+        }
+        else
+        {
+            DOTween.KillAll();
+            Destroy(gameObject);
+            LoadingScreen.LoadScene(currentScene);
         }
     }
 
@@ -358,51 +435,20 @@ public class GameManager : MonoBehaviour
         return string.Empty;
     }
 
-    /// <summary>
-    /// Activa o desactiva la pausa del juego.
-    /// </summary>
-    public void TogglePause()
-    {
-        isPaused = !isPaused;
 
-        if (isPaused)
-        {
-            Time.timeScale = 0;
-            if (pausePanel != null) pausePanel.SetActive(true);
-            if (pauseButton != null) pauseButton.SetActive(false);
-            if (resumeButton != null) resumeButton.SetActive(true);
-        }
-        else
-        {
-            Time.timeScale = 1;
-            if (pausePanel != null) pausePanel.SetActive(false);
-            if (pauseButton != null) pauseButton.SetActive(true);
-            if (resumeButton != null) resumeButton.SetActive(false);
-        }
-    }
-
-    public void ResumeGame()
-    {
-        isPaused = false;
-        Time.timeScale = 1;
-        if (pausePanel != null) pausePanel.SetActive(false);
-        if (pauseButton != null) pauseButton.SetActive(true);
-        if (resumeButton != null) resumeButton.SetActive(false);
-    }
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CLEANUP
+    // ═══════════════════════════════════════════════════════════════════════════
 
     private void OnDestroy()
     {
-        // Limpiar suscripciones
-        if (SoundManager.Instance != null)
-        {
-            SoundManager.Instance.OnInstructionStart -= DisablePauseButton;
-            SoundManager.Instance.OnInstructionEnd -= EnablePauseButton;
-        }
-
         // Desuscribirse de la actividad actual si existe
         if (currentActivity != null)
         {
             currentActivity.OnActivityComplete -= HandleActivityComplete;
         }
+
+        // Asegurar que el juego no quede pausado
+        Time.timeScale = 1;
     }
 }

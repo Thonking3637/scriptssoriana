@@ -12,17 +12,57 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 5a5f725efa93f1447984a0dd4f65240c, type: 3}
   m_Name: ActivitySummaryConfig
   m_EditorClassIdentifier: 
+  global2StarMessage: "\xA1Muy bien! Sigue practicando."
+  global1StarMessage: Buen intento. Puedes mejorar.
+  global0StarMessage: "Necesitas m\xE1s pr\xE1ctica."
   activityConfigs:
+  - activityId: LINEA_CAJAS_ALTA_CAJA
+    displayName: Alta Caja
+    threeStarMessage: "APRENDISTE A ACTIVAR TU CAJA E INICIAR SESI\xD3N"
+  - activityId: LINEA_CAJAS_SCAN
+    displayName: Escaneo Productos
+    threeStarMessage: "ESCANEASTE LOS 18 ART\xCDCULOS EN MENOS DE UN MINUTO."
+  - activityId: LINEA_CAJAS_CONSULTA_CHECK
+    displayName: Consulta Productos
+    threeStarMessage: "AHORA SABES C\xD3MO CONSULTAR EL PRECIO DE UN ART\xEDCULO."
+  - activityId: LINEA_CAJAS_CONSULTA_FRUTA
+    displayName: Consulta Fruta
+    threeStarMessage: "AHORA SABES C\xD3MO BUSCAR FRUTAS Y VERDURAS"
+  - activityId: LINEA_CAJAS_SERVICIO_FISICO
+    displayName: Recibo Fisico
+    threeStarMessage: "HAS REALIZADO LA RECEPCI\xD3N DE UN RECIBO F\xCDSICO CORRECTAMENTE."
+  - activityId: LINEA_CAJAS_RECARGA_TA
+    displayName: Recarga
+    threeStarMessage: HAS REALIZADO UNA RECARGA CORRECTAMENTE
+  - activityId: LINEA_CAJAS_REDONDEO
+    displayName: Recarga
+    threeStarMessage: HAS REALIZADO EL REDONDEO DE CENTAVOS CORRECTAMENTE
+  - activityId: LINEA_CAJAS_PRECIO_CAMBIADO
+    displayName: Cambiar Precio
+    threeStarMessage: "HAS REALIZADO LA SUSPENSI\xD3N Y REACTIVACI\xD3N DE CUENTA
+      CORRECTAMENTE"
+  - activityId: LINEA_CAJAS_ALERTA_VALORES
+    displayName: Alerta Valores
+    threeStarMessage: HAS APRENDIDO A RETIRAR LOS VALORES CORRECTAMENTE
+  - activityId: LINEA_CAJAS_BAJA_PDV
+    displayName: Baja Punto de Venta
+    threeStarMessage: HAS APRENDIDO A REALIZAR EL BAJA DE CAJA
   - activityId: LINEA_CAJAS_PAGO_EFECTIVO
-    displayName: PAGO_EFECTIVO
-    starMessages:
-      star3Message: HAS REALIZADO UN COBRO CON EFECTIVO CORRECTAMENTE.
-      star2Message: HAY QUE PRACTICAR UN POCO MAS A DAR EL CAMBIO.
-      star1Message: COMETER MUCHOS ERRORES PUEDE AFECTAR TU CAJA.
-      star0Message: "NECESITAS M\xC1S PR\xC1CTICA."
-    errorSpecificMessages: []
-  defaultMessages:
-    star3Message: "\xA1Excelente trabajo!"
-    star2Message: "\xA1Muy bien! Sigue practicando."
-    star1Message: Buen intento. Puedes mejorar.
-    star0Message: "Necesitas m\xE1s pr\xE1ctica."
+    displayName: Pago con Efectivo
+    threeStarMessage: HAS REALIZADO UN COBRO CON EFECTIVO CORRECTAMENTE
+  - activityId: LINEA_CAJAS_PAGO_TARJETA
+    displayName: Baja Punto de Venta
+    threeStarMessage: HAS REALIZADO UN COBRO CON TARJETA CORRECTAMENTE
+  - activityId: LINEA_CAJAS_PAGO_OMONEL
+    displayName: Pago con Omonel
+    threeStarMessage: HAS REALIZADO UN COBRO CON TARJETA OMONEL
+  - activityId: LINEA_CAJAS_CONSULTA_PRECIO
+    displayName: Consulta de Precio
+    threeStarMessage: HAS APRENDIDO A REALIZAR LA CONSULTA DE PRECIO
+  - activityId: LINEA_CAJAS_CANJEO_PUNTOS
+    displayName: Canjeo de Puntos
+    threeStarMessage: HAS APRENDIDO A REALIZAR EL CANJEO DE PUNTOS
+  - activityId: LINEA_CAJAS_CLIENTE_TIEMPO
+    displayName: Cliente Tiempo
+    threeStarMessage: HAZ ATENDIDO AL CLIENTE CORRECTAMENTE
+  defaultThreeStarMessage: "\xA1Excelente trabajo!"

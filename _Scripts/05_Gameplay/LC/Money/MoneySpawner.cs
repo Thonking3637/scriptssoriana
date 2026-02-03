@@ -228,7 +228,6 @@ public class MoneySpawner: MonoBehaviour
 
         if (!Mathf.Approximately(givenAmount, changeDue))
         {
-            Debug.Log("Error: La cantidad entregada no es correcta.");
             SoundManager.Instance.PlaySound("error");
 
             var activity = FindObjectOfType<CashPaymentActivity>();
@@ -257,7 +256,6 @@ public class MoneySpawner: MonoBehaviour
         return givenAmount;
     }
 
-    // ✅ NUEVO: UI de progreso para retiro parcial
     public void SetPartialWithdrawalTexts(TextMeshProUGUI targetText, TextMeshProUGUI progressText, int amount)
     {
         targetAmountText = targetText;
@@ -343,5 +341,24 @@ public class MoneySpawner: MonoBehaviour
         DeliverMoneyToCustomTarget();
     }
 
+    public bool ValidateAlertAmountWithResult()
+    {
+        if (!useCustomDeliveryFlow || !deliverToCustomTarget)
+        {
+            Debug.LogWarning("No está configurado el flujo de retiro personalizado.");
+            SoundManager.Instance.PlaySound("error");
+            return false;
+        }
 
+        if (!ValidatePartialWithdrawal(requiredCustomAmount))
+        {
+            Debug.Log("No se entregó la cantidad exacta requerida.");
+            SoundManager.Instance.PlaySound("error");
+            return false;
+        }
+
+        Debug.Log("Cantidad correcta entregada, entregando dinero.");
+        DeliverMoneyToCustomTarget();
+        return true;
+    }
 }

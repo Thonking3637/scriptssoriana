@@ -60,7 +60,7 @@ public abstract class PhasedActivityBasePro : ActivityBase
     public void NextTutorialStep()
     {
         // Si ya hay un audio de instrucción sonando, espera a que termine antes de pasar
-        if (soundManager != null && soundManager.IsInstructionPlaying())
+        if (soundManager != null && soundManager.IsInstructionPlaying)
         {
             StartCoroutine(WaitForInstructionEnd(() => GoToTutorialStep(tutorialStep + 1)));
         }
@@ -72,7 +72,7 @@ public abstract class PhasedActivityBasePro : ActivityBase
 
     private IEnumerator WaitForInstructionEnd(Action next)
     {
-        yield return new WaitUntil(() => soundManager == null || !soundManager.IsInstructionPlaying());
+        yield return new WaitUntil(() => soundManager == null || !soundManager.IsInstructionPlaying);
         yield return new WaitForSeconds(0.05f); // pequeño margen
         next?.Invoke();
     }

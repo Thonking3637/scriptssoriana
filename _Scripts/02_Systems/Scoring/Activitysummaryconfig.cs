@@ -10,18 +10,26 @@ using System.Collections.Generic;
 [CreateAssetMenu(menuName = "Training/Activity Summary Config", fileName = "ActivitySummaryConfig")]
 public class ActivitySummaryConfig : ScriptableObject
 {
-    [Header("Configuración por Actividad")]
-    [SerializeField] private List<ActivityMessages> activityConfigs = new List<ActivityMessages>();
+    [Header("═══ MENSAJES GLOBALES (2★, 1★, 0★) ═══")]
+    [Tooltip("Estos mensajes se usan para TODAS las actividades según las estrellas obtenidas")]
 
-    [Header("Mensajes por Defecto (si no hay config específica)")]
-    [SerializeField]
-    private StarMessages defaultMessages = new StarMessages
-    {
-        star3Message = "¡Excelente trabajo!",
-        star2Message = "¡Muy bien! Sigue practicando.",
-        star1Message = "Buen intento. Puedes mejorar.",
-        star0Message = "Necesitas más práctica."
-    };
+    [TextArea(1, 3)]
+    [SerializeField] private string global2StarMessage = "¡Muy bien! Sigue practicando.";
+
+    [TextArea(1, 3)]
+    [SerializeField] private string global1StarMessage = "Buen intento. Puedes mejorar.";
+
+    [TextArea(1, 3)]
+    [SerializeField] private string global0StarMessage = "Necesitas más práctica.";
+
+    [Header("═══ MENSAJES DE 3 ESTRELLAS POR ACTIVIDAD ═══")]
+    [Tooltip("Solo define el mensaje de éxito (3★) para cada actividad")]
+    [SerializeField] private List<ActivityThreeStarMessage> activityConfigs = new List<ActivityThreeStarMessage>();
+
+    [Header("═══ MENSAJE DE 3★ POR DEFECTO ═══")]
+    [Tooltip("Se usa si una actividad no tiene mensaje de 3★ configurado")]
+    [TextArea(1, 3)]
+    [SerializeField] private string defaultThreeStarMessage = "¡Excelente trabajo!";
 
     // ═══════════════════════════════════════════════════════════════════════════════
     // API PÚBLICA
@@ -32,48 +40,26 @@ public class ActivitySummaryConfig : ScriptableObject
     /// </summary>
     public string GetMessage(string activityId, int stars, int errors = 0)
     {
-        // Buscar configuración específica de la actividad
-        var config = activityConfigs.Find(c => c.activityId == activityId);
-
-        if (config != null)
+        // Si es 3 estrellas → buscar mensaje específico de la actividad
+        if (stars == 3)
         {
-            return GetMessageFromConfig(config, stars, errors);
-        }
+            var config = activityConfigs.Find(c => c.activityId == activityId);
 
-        // Usar mensajes por defecto
-        return GetMessageByStars(defaultMessages, stars);
-    }
-
-    /// <summary>
-    /// Obtiene el mensaje considerando errores específicos si están configurados.
-    /// </summary>
-    private string GetMessageFromConfig(ActivityMessages config, int stars, int errors)
-    {
-        // Si hay mensajes específicos por tipo de error y hubo errores
-        if (errors > 0 && config.errorSpecificMessages != null && config.errorSpecificMessages.Count > 0)
-        {
-            // Buscar mensaje específico para este rango de errores
-            foreach (var errorMsg in config.errorSpecificMessages)
+            if (config != null && !string.IsNullOrEmpty(config.threeStarMessage))
             {
-                if (errors >= errorMsg.minErrors && errors <= errorMsg.maxErrors)
-                {
-                    return errorMsg.message;
-                }
+                return config.threeStarMessage;
             }
+
+            // Si no hay config específica, usar el default de 3★
+            return defaultThreeStarMessage;
         }
 
-        // Usar mensajes por estrellas
-        return GetMessageByStars(config.starMessages, stars);
-    }
-
-    private string GetMessageByStars(StarMessages messages, int stars)
-    {
+        // Para 2, 1, 0 estrellas → usar mensajes globales
         return stars switch
         {
-            3 => messages.star3Message,
-            2 => messages.star2Message,
-            1 => messages.star1Message,
-            _ => messages.star0Message
+            2 => global2StarMessage,
+            1 => global1StarMessage,
+            _ => global0StarMessage
         };
     }
 
@@ -101,61 +87,21 @@ public class ActivitySummaryConfig : ScriptableObject
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CLASES DE DATOS
+// CLASE DE DATOS SIMPLIFICADA
 // ═══════════════════════════════════════════════════════════════════════════════
 
 [Serializable]
-public class ActivityMessages
+public class ActivityThreeStarMessage
 {
     [Header("Identificación")]
     [Tooltip("ID de la actividad (debe coincidir con ActivityIdMap)")]
     public string activityId;
 
-    [Tooltip("Nombre para mostrar en el editor")]
+    [Tooltip("Nombre para mostrar en el editor (solo referencia)")]
     public string displayName;
 
-    [Header("Mensajes por Estrellas")]
-    public StarMessages starMessages = new StarMessages
-    {
-        star3Message = "¡Excelente trabajo!",
-        star2Message = "¡Muy bien! Sigue practicando.",
-        star1Message = "Buen intento. Puedes mejorar.",
-        star0Message = "Necesitas más práctica."
-    };
-
-    [Header("Mensajes por Errores (Opcional)")]
-    [Tooltip("Mensajes específicos cuando hay cierto número de errores")]
-    public List<ErrorSpecificMessage> errorSpecificMessages = new List<ErrorSpecificMessage>();
-}
-
-[Serializable]
-public class StarMessages
-{
-    [TextArea(1, 3)]
-    public string star3Message = "¡Excelente trabajo!";
-
-    [TextArea(1, 3)]
-    public string star2Message = "¡Muy bien! Sigue practicando.";
-
-    [TextArea(1, 3)]
-    public string star1Message = "Buen intento. Puedes mejorar.";
-
-    [TextArea(1, 3)]
-    public string star0Message = "Necesitas más práctica.";
-}
-
-[Serializable]
-public class ErrorSpecificMessage
-{
-    [Tooltip("Mínimo de errores para mostrar este mensaje")]
-    public int minErrors = 1;
-
-    [Tooltip("Máximo de errores para mostrar este mensaje (usar 999 para 'sin límite')")]
-    public int maxErrors = 999;
-
-    [Tooltip("Tipo de error (para referencia, no afecta la lógica)")]
-    public string errorType = "General";
-
+    [Header("Mensaje de Éxito")]
+    [Tooltip("Mensaje que se muestra cuando el usuario obtiene 3 estrellas")]
     [TextArea(2, 4)]
-    public string message = "Cometiste algunos errores. ¡Sigue practicando!";
+    public string threeStarMessage = "¡Excelente trabajo!";
 }

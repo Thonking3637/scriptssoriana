@@ -4,126 +4,237 @@ using UnityEngine.UI;
 using System.Collections.Generic;
 using DG.Tweening;
 
+/// <summary>
+/// SupervisorVerification - Actividad de Verificación con Supervisor (Alta de Caja)
+/// 
+/// FLUJO:
+/// 1. Presionar SUPER → Llega supervisor
+/// 2. Diálogo con opciones → Responder correctamente
+/// 3. Supervisor va al teclado → Ingresar contraseña
+/// 4. Supervisor se va → Completar actividad
+/// 
+/// TIPO DE EVALUACIÓN: AccuracyBased
+/// - Único punto de error: Responder incorrectamente al diálogo
+/// 
+/// CONFIGURACIÓN DEL ADAPTER:
+/// - evaluationType: AccuracyBased
+/// - errorsFieldName: "_errorCount"
+/// - successesFieldName: "_successCount"
+/// - expectedTotal: 0 (se calcula automático)
+/// 
+/// INSTRUCCIONES:
+/// 0 = Presionar SUPER
+/// 1 = Supervisor llega
+/// 2 = Supervisor va al teclado
+/// 3 = Ingresar contraseña
+/// </summary>
 public class SupervisorVerification : ActivityBase
 {
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - SUPERVISOR
+    // ══════════════════════════════════════════════════════════════════════════════
+
     [Header("Supervisor")]
-    public GameObject supervisorPrefab;
-    public Transform supervisorSpawnPoint;
-    public Transform supervisorEntryPoint;
-    public List<Transform> supervisorMiddlePath;
-    public Transform supervisorExitPoint;
-    private GameObject currentSupervisor;
+    [SerializeField] private GameObject supervisorPrefab;
+    [SerializeField] private Transform supervisorSpawnPoint;
+    [SerializeField] private Transform supervisorEntryPoint;
+    [SerializeField] private List<Transform> supervisorMiddlePath;
+    [SerializeField] private Transform supervisorExitPoint;
 
-    [Header("Panel & Password")]
-    public GameObject supervisorPasswordPanel;
-    public GameObject containerPanel;
-    public TextMeshProUGUI passwordText;
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - PANELES Y CONTRASEÑA
+    // ══════════════════════════════════════════════════════════════════════════════
 
-    [Header("Bot�n o Comando")]
-    public List<Button> superCommandButtons;
-    public Button continueButton;
+    [Header("Panel y Contraseña")]
+    [SerializeField] private GameObject supervisorPasswordPanel;
+    [SerializeField] private GameObject containerPanel;
+    [SerializeField] private TextMeshProUGUI passwordText;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN - BOTONES
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    [Header("Botones")]
+    [SerializeField] private List<Button> superCommandButtons;
+    [SerializeField] private Button continueButton;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // CONFIGURACIÓN DE CÁMARA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private const string CAM_START = "Iniciando Juego";
+    private const string CAM_INIT = "Actividad 6 Iniciando";
+    private const string CAM_SUPERVISOR_1 = "Mirada Supervisor 1";
+    private const string CAM_SUPERVISOR_2 = "Mirada Supervisor 2";
+    private const string CAM_PASSWORD = "Actividad 4 Supervisor Contraseña";
+    private const string CAM_SUCCESS = "Actividad 6 Success";
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ESTADO INTERNO
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private GameObject _currentSupervisor;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS - LEÍDAS POR ADAPTER VÍA REFLECTION
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Contador de errores - Se incrementa cuando el usuario responde incorrectamente.
+    /// </summary>
+    private int _errorCount = 0;
+
+    /// <summary>
+    /// Contador de aciertos - Se incrementa cuando el usuario responde correctamente.
+    /// </summary>
+    private int _successCount = 0;
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIFECYCLE
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void Initialize() { }
 
     public override void StartActivity()
     {
         base.StartActivity();
+
+        ResetMetrics();
         InitializeCommands();
+
         UpdateInstructionOnce(0, () =>
         {
-            cameraController.MoveToPosition("Actividad 6 Iniciando");
+            cameraController.MoveToPosition(CAM_INIT);
             AnimateButtonsSequentiallyWithActivation(superCommandButtons, SpawnSupervisor);
         });
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
+
     protected override void InitializeCommands()
     {
         base.InitializeCommands();
-        foreach (var button in superCommandButtons) button.gameObject.SetActive(false);
+
+        foreach (var button in superCommandButtons)
+            button.gameObject.SetActive(false);
 
         commandManager.commandList.Add(new CommandManager.CommandAction
         {
             command = "SUPER",
-            customAction = SpawnSupervisor,
-            requiredActivity = "Day6_SupervisorPassword",
+            requiredActivity = "Day3_SupervisorVerification",
             commandButtons = superCommandButtons
         });
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // MÉTRICAS
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private void ResetMetrics()
+    {
+        _errorCount = 0;
+        _successCount = 0;
+    }
+
+    private void RegisterError()
+    {
+        _errorCount++;
+        SoundManager.Instance.PlaySound("error");
+        Debug.Log($"[SupervisorVerification] Error registrado. Total: {_errorCount}");
+    }
+
+    private void RegisterSuccess()
+    {
+        _successCount++;
+        Debug.Log($"[SupervisorVerification] Acierto registrado. Total: {_successCount}");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 1: SPAWN SUPERVISOR
+    // ══════════════════════════════════════════════════════════════════════════════
+
     private void SpawnSupervisor()
     {
-        GameObject supervisorGO = Instantiate(supervisorPrefab, supervisorSpawnPoint.position, supervisorPrefab.transform.rotation);
-        currentSupervisor = supervisorGO;
+        SoundManager.Instance.PlaySound("success");
+        _currentSupervisor = Instantiate(
+            supervisorPrefab,
+            supervisorSpawnPoint.position,
+            supervisorPrefab.transform.rotation
+        );
 
-        SupervisorMovement movement = supervisorGO.GetComponent<SupervisorMovement>();
-
-        movement.entryPoint = supervisorEntryPoint;
-        movement.middlePath = supervisorMiddlePath;
-        movement.exitPoint = supervisorExitPoint;
-        movement.animator = supervisorGO.GetComponent<Animator>();
+        SupervisorMovement movement = _currentSupervisor.GetComponent<SupervisorMovement>();
+        ConfigureSupervisorMovement(movement);
 
         UpdateInstructionOnce(1, () =>
         {
-            cameraController.MoveToPosition("Mirada Supervisor 1", () =>
+            cameraController.MoveToPosition(CAM_SUPERVISOR_1, () =>
             {
                 movement.GoToEntryPoint(() =>
                 {
-                    cameraController.MoveToPosition("Mirada Supervisor 2", () =>
-                    {
-                        ShowSupervisorDialog();
-                    });
+                    cameraController.MoveToPosition(CAM_SUPERVISOR_2, ShowSupervisorDialog);
                 });
             });
         });
     }
 
+    private void ConfigureSupervisorMovement(SupervisorMovement movement)
+    {
+        movement.entryPoint = supervisorEntryPoint;
+        movement.middlePath = supervisorMiddlePath;
+        movement.exitPoint = supervisorExitPoint;
+        movement.animator = _currentSupervisor.GetComponent<Animator>();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 2: DIÁLOGO CON SUPERVISOR
+    // ══════════════════════════════════════════════════════════════════════════════
+
     private void ShowSupervisorDialog()
     {
         DialogSystem.Instance.ShowClientDialog(
-            currentSupervisor.GetComponent<Client>(),
-            "�Qu� sucedi�? Cu�ntame.",
+            _currentSupervisor.GetComponent<Client>(),
+            "¿Qué sucedió? Cuéntame.",
             () =>
             {
                 DialogSystem.Instance.ShowClientDialogWithOptions(
-                    "�Qu� le debes decir a la supervisora?",
+                    "¿Qué le debes decir a la supervisora?",
                     new List<string>
                     {
-                    "Termin� mi turno, quiero dar la alta de caja",
-                    "Ese cliente est� loco",
-                    "No entiendo qu� quiere",
-                    "No s� para qu� vino"
+                        "Terminé mi turno, quiero dar el alta de caja.",
+                        "Te llamé porque quise.",
+                        "Hola, ¿cómo estás?",
+                        "Ya me quiero ir, ¿puedo?"
                     },
-                    "Termin� mi turno, quiero dar la alta de caja",
+                    "Terminé mi turno, quiero dar el alta de caja.",
                     OnCorrectSupervisorAnswer,
-                    OnWrongSupervisorAnswer
+                    RegisterError
                 );
             });
-    }
-    private void OnWrongSupervisorAnswer()
-    {
-        SoundManager.Instance.PlaySound("error");
     }
 
     private void OnCorrectSupervisorAnswer()
     {
+        RegisterSuccess();
+
         DOVirtual.DelayedCall(0.5f, () =>
         {
             DialogSystem.Instance.ShowClientDialog(
-                currentSupervisor.GetComponent<Client>(),
+                _currentSupervisor.GetComponent<Client>(),
                 "Entiendo, lo haremos en este momento.",
                 () =>
                 {
                     DialogSystem.Instance.HideDialog();
-                    SupervisorMovement movement = currentSupervisor.GetComponent<SupervisorMovement>();
+                    SupervisorMovement movement = _currentSupervisor.GetComponent<SupervisorMovement>();
 
-                    cameraController.MoveToPosition("Mirada Supervisor 1", () =>
+                    cameraController.MoveToPosition(CAM_SUPERVISOR_1, () =>
                     {
                         movement.GoThroughMiddlePath(() =>
                         {
                             UpdateInstructionOnce(2, () =>
                             {
-                                cameraController.MoveToPosition("Actividad 4 Supervisor Contrase�a", () =>
-                                {
-                                    HandleChangePassword();
-                                });
+                                cameraController.MoveToPosition(CAM_PASSWORD, HandleChangePassword);
                             });
                         });
                     });
@@ -131,35 +242,25 @@ public class SupervisorVerification : ActivityBase
         });
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FASE 3: CONTRASEÑA
+    // ══════════════════════════════════════════════════════════════════════════════
+
     private void HandleChangePassword()
     {
-        UpdateInstructionOnce(3, () =>
-        {
-            supervisorPasswordPanel.SetActive(true);
-            AnimatePasswordEntry(() =>
-            {
-                SupervisorMovement movement = currentSupervisor.GetComponent<SupervisorMovement>();
-                movement.GoToExit(() => Debug.Log("Cliente se va"));
-                supervisorPasswordPanel.SetActive(false);
-                containerPanel.SetActive(false);
-                ActivityComplete();
-            });
-        });
-    }
+        supervisorPasswordPanel.SetActive(true);
 
-    private void ActivityComplete()
-    {
-        commandManager.commandList.Clear();
-        cameraController.MoveToPosition("Actividad 6 Success", () =>
+        AnimatePasswordEntry(() =>
         {
-            continueButton.onClick.RemoveAllListeners();
-            SoundManager.Instance.RestorePreviousMusic();
-            SoundManager.Instance.PlaySound("win");
-            continueButton.onClick.AddListener(() =>
-            {
-                cameraController.MoveToPosition("Iniciando Juego");
-                CompleteActivity();
-            });
+            SupervisorMovement movement = _currentSupervisor.GetComponent<SupervisorMovement>();
+            movement.GoToExit(() => Debug.Log("[SupervisorVerification] Supervisor se va"));
+
+            supervisorPasswordPanel.SetActive(false);
+
+            if (containerPanel != null)
+                containerPanel.SetActive(false);
+
+            ActivityComplete();
         });
     }
 
@@ -172,6 +273,7 @@ public class SupervisorVerification : ActivityBase
         DOVirtual.DelayedCall(0.3f, () =>
         {
             AddDigit();
+
             void AddDigit()
             {
                 if (index >= sequence.Length)
@@ -187,5 +289,52 @@ public class SupervisorVerification : ActivityBase
         });
     }
 
-    protected override void Initialize() { }
+    // ══════════════════════════════════════════════════════════════════════════════
+    // FINALIZACIÓN
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    private void ActivityComplete()
+    {
+        commandManager.commandList.Clear();
+
+        cameraController.MoveToPosition(CAM_SUCCESS, () =>
+        {
+            SoundManager.Instance.RestorePreviousMusic();
+
+            var adapter = GetComponent<ActivityMetricsAdapter>();
+
+            if (adapter != null)
+            {
+                adapter.NotifyActivityCompleted();
+            }
+            else
+            {
+                ShowManualSuccessPanel();
+            }
+        });
+    }
+
+    private void ShowManualSuccessPanel()
+    {
+        SoundManager.Instance.PlaySound("win");
+
+        continueButton.onClick.RemoveAllListeners();
+        continueButton.onClick.AddListener(() =>
+        {
+            cameraController.MoveToPosition(CAM_START);
+            CompleteActivity();
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // LIMPIEZA
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    protected override void OnDisable()
+    {
+        base.OnDisable();
+
+        if (continueButton != null)
+            continueButton.onClick.RemoveAllListeners();
+    }
 }

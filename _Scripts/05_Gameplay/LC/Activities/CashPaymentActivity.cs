@@ -10,8 +10,8 @@ using System.Collections.Generic;
 /// Para habilitar el sistema de 3 estrellas:
 /// 1. Agregar componente ActivityMetricsAdapter al GameObject
 /// 2. Configurar en el Inspector:
-///    - successesFieldName = "successCount" (cobros exitosos)
-///    - errorsFieldName = "errorCount" (errores de cambio)
+///    - successesFieldName = "_successCount" (cobros exitosos)
+///    - errorsFieldName = "_errorCount" (errores de cambio)
 ///    - expectedTotal = 3 (número de intentos)
 /// 3. El adapter se encarga automáticamente de mostrar el panel al completar
 /// 
@@ -30,11 +30,11 @@ public class CashPaymentActivity : LCPaymentActivityBase
     // MÉTRICAS PARA ActivityMetricsAdapter
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>Cantidad de cobros exitosos (para métricas)</summary>
-    [HideInInspector] public int successCount = 0;
+    /// <summary>Cantidad de cobros exitosos (para métricas, leído por adapter vía reflection)</summary>
+    private int _successCount = 0;
 
-    /// <summary>Cantidad de errores de cambio (para métricas)</summary>
-    [HideInInspector] public int errorCount = 0;
+    /// <summary>Cantidad de errores de cambio (para métricas, leído por adapter vía reflection)</summary>
+    private int _errorCount = 0;
     // ══════════════════════════════════════════════════════════════════════════════
     // CONFIGURACIÓN ESPECÍFICA DE EFECTIVO
     // ══════════════════════════════════════════════════════════════════════════════
@@ -210,7 +210,7 @@ public class CashPaymentActivity : LCPaymentActivityBase
     public void OnCorrectChangeGiven()
     {
         // ✅ Registrar éxito para métricas
-        successCount++;
+        _successCount++;
 
         // Cerrar panel de dinero
         MoneyManager.CloseMoneyPanel(moneyPanel, moneyPanelHidePos);
@@ -248,8 +248,8 @@ public class CashPaymentActivity : LCPaymentActivityBase
     public void OnIncorrectChangeGiven()
     {
         // ✅ Registrar error para métricas
-        errorCount++;
-        Debug.Log($"[CashPayment] Error de cambio registrado. Total errores: {errorCount}");
+        _errorCount++;
+        Debug.Log($"[CashPayment] Error de cambio registrado. Total errores: {_errorCount}");
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
@@ -310,7 +310,7 @@ public class CashPaymentActivity : LCPaymentActivityBase
         if (customerPayment != null)
             customerPayment.ResetCustomerPayment();
 
-        // NO resetear successCount ni errorCount aquí - se acumulan durante toda la actividad
+        // NO resetear _successCount ni _errorCount aquí - se acumulan durante toda la actividad
     }
 
     /// <summary>
@@ -319,8 +319,8 @@ public class CashPaymentActivity : LCPaymentActivityBase
     /// </summary>
     private void ResetMetrics()
     {
-        successCount = 0;
-        errorCount = 0;
+        _successCount = 0;
+        _errorCount = 0;
     }
 
     protected override void OnRestartAttempt()

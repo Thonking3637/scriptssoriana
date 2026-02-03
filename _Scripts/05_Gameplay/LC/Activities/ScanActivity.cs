@@ -227,13 +227,32 @@ public class ScanActivity : ActivityBase
     {
         StopAllCoroutines();
         isActivityActive = false;
-
         timeElapsed = initialActivityTime - totalActivityTime;
 
         CustomerMovement movement = currentCustomer.GetComponent<CustomerMovement>();
         movement?.MoveToExit();
 
-        NotifyAdapterCompleted();
+        if (productsScannedText != null)
+            productsScannedText.gameObject.SetActive(false);
+        if (timerText != null)
+            timerText.text = "";
+
+        var adapter = GetComponent<ActivityMetricsAdapter>();
+        if (adapter != null)
+        {
+            adapter.SetCustomMetrics(
+                value1: scannedCount,
+                total1: minProductsToScan,
+                timeSeconds: timeElapsed,
+                displayLine1: $"PRODUCTOS: {scannedCount}/{minProductsToScan}",
+                displayLine2: $"TIEMPO: {timeElapsed:F1}s"
+            );
+            adapter.NotifyActivityCompleted();
+        }
+        else
+        {
+            base.CompleteActivity();
+        }
     }
 
     private void NotifyAdapterCompleted()
@@ -247,25 +266,7 @@ public class ScanActivity : ActivityBase
 
         var adapter = GetComponent<ActivityMetricsAdapter>();
         if (adapter != null)
-        {
-            // Cambiar mensaje según productos escaneados
-            if (scannedCount >= minProductsToScan)
-            {
-                adapter.customMessage = "ESCANEASTE LOS 18 ARTÍCULOS EN MENOS DE UN MINUTO..";
-            }
-            else if (scannedCount >= 15)
-            {
-                adapter.customMessage = "¡Casi lo logras! Solo faltaron unos pocos productos.";
-            }
-            else if (scannedCount >= 10)
-            {
-                adapter.customMessage = "Buen intento, pero necesitas más práctica.";
-            }
-            else
-            {
-                adapter.customMessage = "Necesitas mejorar tu velocidad de escaneo.";
-            }
-
+        {     
             Debug.Log($"[ScanActivity] {scannedCount}/{minProductsToScan} - {adapter.customMessage}");
             adapter.NotifyActivityCompleted();
         }
